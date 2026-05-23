@@ -28,7 +28,7 @@ This file is the agent's task queue. Unchecked items get implemented in order. W
 - [x] Context menu: 'Mark tab as hot' to boost heat manually
 - [x] Audible/muted tab indicator in popup list
 - [x] Heat histogram chart for whole window (distribution of cold→hot)
-- [ ] Suspend cold tabs (discard via chrome.tabs.discard) instead of closing
+- [x] Suspend cold tabs (discard via chrome.tabs.discard) instead of closing
 - [ ] Undo last close action with toast notification
 - [ ] Tab age column showing time since tab was first opened
 - [ ] Group selector: filter popup by current tab group

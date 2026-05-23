@@ -50,3 +50,28 @@ if (!/chrome\.tabs\.get\(/.test(bg)) {
   process.exit(1);
 }
 
+// Suspend cold tabs (discard) feature: SW must expose a suspendIdleTabs path
+// that uses chrome.tabs.discard, and the popup must wire a button for it.
+if (!/suspendIdleTabs/.test(bg)) {
+  console.error("background.js must define suspendIdleTabs");
+  process.exit(1);
+}
+if (!/chrome\.tabs\.discard/.test(bg)) {
+  console.error("background.js must call chrome.tabs.discard for the suspend path");
+  process.exit(1);
+}
+if (!/th:suspendIdle/.test(bg)) {
+  console.error("background.js must handle the th:suspendIdle message");
+  process.exit(1);
+}
+const popupHtml = fs.readFileSync("src/popup.html", "utf8");
+if (!/id="suspend-idle-btn"/.test(popupHtml)) {
+  console.error("popup.html must include the #suspend-idle-btn action");
+  process.exit(1);
+}
+const popupJs = fs.readFileSync("src/popup.js", "utf8");
+if (!/wireSuspendIdle/.test(popupJs) || !/th:suspendIdle/.test(popupJs)) {
+  console.error("popup.js must wire the suspend-idle action");
+  process.exit(1);
+}
+

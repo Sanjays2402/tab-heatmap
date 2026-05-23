@@ -8,6 +8,7 @@ const MSG = Object.freeze({
   JUMP_HOTTEST: "th:jumpHottest",
   GET_ACTIVATION_COUNTS: "th:getActivationCounts",
   CLOSE_IDLE: "th:closeIdle",
+  SUSPEND_IDLE: "th:suspendIdle",
   GET_SETTINGS: "th:getSettings",
   RESTORE_TAB_META: "th:restoreTabMeta",
 });
@@ -945,6 +946,92 @@ async function wireCloseIdle() {
   });
 }
 
+/**
+ * Wire the "Suspend idle" action. Same two-step confirm UX as Close idle,
+ * but uses chrome.tabs.discard server-side instead of removing tabs. Safer:
+ * tabs stay in the strip and reload on click.
+ */
+async function wireSuspendIdle() {
+  const btn = document.getElementById("suspend-idle-btn");
+  const pill = document.getElementById("suspend-threshold-pill");
+  const status = document.getElementById("toolbar-status");
+  const labelEl = btn?.querySelector(".action-label");
+  if (!btn || !labelEl) return;
+
+  const settings = await sendMessage(MSG.GET_SETTINGS).then((r) => r?.settings || { idleCloseDays: 7 });
+  const days = settings.idleCloseDays || 7;
+  const originalLabel = labelEl.textContent;
+  if (pill) pill.textContent = `${days}d`;
+
+  async function countCandidates() {
+    const now = Date.now();
+    const thresholdMs = days * 24 * 60 * 60 * 1000;
+    const [tabs, accessedResp] = await Promise.all([
+      getAllTabs(),
+      sendMessage(MSG.GET_LAST_ACCESSED),
+    ]);
+    const accessed = accessedResp?.map || {};
+    let n = 0;
+    for (const t of tabs) {
+      if (!t || typeof t.id !== "number") continue;
+      if (t.pinned || t.active || t.audible || t.discarded) continue;
+      const key = String(t.id);
+      const m = accessed[key];
+      const stamp = typeof m === "number" ? m : (typeof t.lastAccessed === "number" ? t.lastAccessed : 0);
+      if (stamp <= 0) continue;
+      if (now - stamp >= thresholdMs) n++;
+    }
+    return n;
+  }
+
+  let confirmTimer = 0;
+  let armed = false;
+
+  function disarm() {
+    armed = false;
+    btn.classList.remove("is-confirming");
+    labelEl.textContent = originalLabel;
+    if (confirmTimer) { clearTimeout(confirmTimer); confirmTimer = 0; }
+  }
+
+  function setStatus(text, warn) {
+    if (!status) return;
+    status.textContent = text || "";
+    status.classList.toggle("is-warn", !!warn);
+  }
+
+  btn.addEventListener("click", async (ev) => {
+    ev.preventDefault();
+    if (!armed) {
+      const n = await countCandidates();
+      if (n === 0) {
+        setStatus(`No idle tabs to suspend (>${days}d)`, false);
+        return;
+      }
+      armed = true;
+      btn.classList.add("is-confirming");
+      labelEl.textContent = `Suspend ${n} tab${n === 1 ? "" : "s"}?`;
+      setStatus("Click again to confirm", true);
+      confirmTimer = setTimeout(disarm, 4000);
+      return;
+    }
+    btn.setAttribute("disabled", "true");
+    setStatus("Suspending\u2026", false);
+    const result = await sendMessage(MSG.SUSPEND_IDLE, { days });
+    btn.removeAttribute("disabled");
+    disarm();
+    if (result?.ok) {
+      const s = result.suspended || 0;
+      const already = result.skippedAlready || 0;
+      const suffix = already > 0 ? ` (${already} already)` : "";
+      setStatus(s === 0 ? `Nothing to suspend${suffix}` : `Suspended ${s} tab${s === 1 ? "" : "s"}${suffix}`, false);
+      setTimeout(() => { render().catch(() => {}); }, 150);
+    } else {
+      setStatus(result?.error ? `Failed: ${result.error}` : "Failed", true);
+    }
+  });
+}
+
 /** Wire the "Group by host" toggle. Persists state in chrome.storage.local. */
 async function wireGroupToggle() {
   const btn = document.getElementById("group-toggle-btn");
@@ -1321,6 +1408,7 @@ function highlightInto(el, text, query) {
 applyTheme();
 wireSettings();
 wireCloseIdle().catch((err) => console.warn(LOG, "wireCloseIdle failed:", err));
+wireSuspendIdle().catch((err) => console.warn(LOG, "wireSuspendIdle failed:", err));
 wireExport().catch((err) => console.warn(LOG, "wireExport failed:", err));
 wireImport().catch((err) => console.warn(LOG, "wireImport failed:", err));
 wireJumpHottest();

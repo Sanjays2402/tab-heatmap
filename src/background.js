@@ -15,6 +15,7 @@ const MSG = Object.freeze({
   GET_ACTIVATION_COUNTS: "th:getActivationCounts",
   GET_ACTIVITY_SPARK: "th:getActivitySpark",
   CLOSE_IDLE: "th:closeIdle",
+  SUSPEND_IDLE: "th:suspendIdle",
   GET_SETTINGS: "th:getSettings",
   SET_SETTINGS: "th:setSettings",
   RESTORE_TAB_META: "th:restoreTabMeta",
@@ -220,6 +221,75 @@ async function closeIdleTabs(days) {
     console.warn(LOG_PREFIX, "closeIdleTabs remove failed:", err);
     return { ok: false, error: String(err?.message || err), closed: 0, candidates: candidates.length, scanned: tabs.length, skippedPinned, skippedWhitelist, days: d };
   }
+}
+
+/**
+ * Suspend (discard) every tab idle longer than `days` days, instead of
+ * closing them. Discarded tabs vanish from RAM but keep their slot in the
+ * tab strip and restore on click — a strictly less destructive cold-action.
+ *
+ * Same exclusions as closeIdleTabs: pinned, active, audible, whitelisted,
+ * and tabs with no recorded access stamp. Additionally skips tabs that are
+ * already discarded so the counts don't lie.
+ */
+async function suspendIdleTabs(days) {
+  const d = Number(days);
+  if (!Number.isFinite(d) || d < 1) {
+    return { ok: false, error: "invalid_days", suspended: 0, candidates: 0, scanned: 0, skippedPinned: 0, skippedAlready: 0 };
+  }
+  if (!chrome?.tabs?.query || !chrome?.tabs?.discard) {
+    return { ok: false, error: "discard_api_unavailable", suspended: 0, candidates: 0, scanned: 0, skippedPinned: 0, skippedAlready: 0 };
+  }
+  const thresholdMs = d * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const [tabs, accessed, settings] = await Promise.all([
+    chrome.tabs.query({}),
+    readLastAccessed(),
+    readSettings(),
+  ]);
+  const whitelist = sanitizeHostList(settings.coldWhitelist);
+  const candidates = [];
+  let skippedWhitelist = 0;
+  let skippedAlready = 0;
+  for (const t of tabs) {
+    if (!isColdCloseCandidate(t, accessed, now, thresholdMs, whitelist)) {
+      if (isHostWhitelisted(hostOfTab(t), whitelist) && t.pinned !== true && t.active !== true) skippedWhitelist++;
+      continue;
+    }
+    if (t.discarded === true) { skippedAlready++; continue; }
+    candidates.push(t.id);
+  }
+  if (candidates.length === 0) {
+    return { ok: true, suspended: 0, candidates: 0, scanned: tabs.length, skippedPinned: 0, skippedWhitelist, skippedAlready, days: d };
+  }
+  // Race-safe re-verify pass, mirroring closeIdleTabs. Pinned/whitelist/
+  // already-discarded all bail.
+  const verified = [];
+  let skippedPinned = 0;
+  await Promise.all(candidates.map(async (id) => {
+    try {
+      const fresh = await chrome.tabs.get(id);
+      if (!fresh) return;
+      if (fresh.pinned === true) { skippedPinned++; return; }
+      if (fresh.active === true) return;
+      if (fresh.discarded === true) { skippedAlready++; return; }
+      if (isHostWhitelisted(hostOfTab(fresh), whitelist)) { skippedWhitelist++; return; }
+      verified.push(id);
+    } catch { /* tab gone */ }
+  }));
+  if (verified.length === 0) {
+    return { ok: true, suspended: 0, candidates: candidates.length, scanned: tabs.length, skippedPinned, skippedWhitelist, skippedAlready, days: d };
+  }
+  // chrome.tabs.discard accepts a single tabId per call; fire in parallel
+  // and count successes. Discard can refuse certain tabs (e.g. chrome://,
+  // devtools) — those reject and we just skip them.
+  let suspended = 0;
+  const results = await Promise.allSettled(verified.map((id) => chrome.tabs.discard(id)));
+  for (const r of results) {
+    if (r.status === "fulfilled" && r.value) suspended++;
+  }
+  if (typeof scheduleBadgeRefresh === "function") scheduleBadgeRefresh(50);
+  return { ok: true, suspended, candidates: candidates.length, scanned: tabs.length, skippedPinned, skippedWhitelist, skippedAlready, days: d };
 }
 
 /** Storage key namespace for per-tab last-accessed map. */
@@ -640,6 +710,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       const settings = await readSettings();
       const days = Number.isFinite(requested) && requested >= 1 ? requested : settings.idleCloseDays;
       const result = await closeIdleTabs(days);
+      sendResponse(result);
+    })();
+    return true;
+  }
+  if (msg.type === MSG.SUSPEND_IDLE) {
+    (async () => {
+      const requested = Number(msg?.days);
+      const settings = await readSettings();
+      const days = Number.isFinite(requested) && requested >= 1 ? requested : settings.idleCloseDays;
+      const result = await suspendIdleTabs(days);
       sendResponse(result);
     })();
     return true;
