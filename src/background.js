@@ -209,6 +209,24 @@ async function closeIdleTabs(days) {
   if (verified.length === 0) {
     return { ok: true, closed: 0, candidates: candidates.length, scanned: tabs.length, skippedPinned, skippedWhitelist, days: d };
   }
+  // Capture the soon-to-be-closed tabs' metadata BEFORE removal so the popup
+  // can offer a working "Undo" toast. We need url/pinned/title and the heat
+  // signals (lastAccessed, activations) to restore the prior state faithfully.
+  const byId = new Map(tabs.map((t) => [t.id, t]));
+  const [counts] = await Promise.all([readActivationCounts()]);
+  const closedTabs = [];
+  for (const id of verified) {
+    const t = byId.get(id);
+    if (!t || !t.url) continue;
+    closedTabs.push({
+      url: t.url,
+      title: t.title || "",
+      pinned: !!t.pinned,
+      windowId: t.windowId,
+      lastAccessed: accessed[String(id)] || (typeof t.lastAccessed === "number" ? t.lastAccessed : 0),
+      activations: typeof counts[String(id)] === "number" ? counts[String(id)] : 0,
+    });
+  }
   try {
     await chrome.tabs.remove(verified);
     // Best-effort cleanup of our maps; onRemoved listeners will catch most cases too.
@@ -216,7 +234,7 @@ async function closeIdleTabs(days) {
     // Force an immediate badge recompute — onRemoved already schedules one,
     // but this collapses the visual delay after a manual cold-close burst.
     if (typeof scheduleBadgeRefresh === "function") scheduleBadgeRefresh(50);
-    return { ok: true, closed: verified.length, candidates: candidates.length, scanned: tabs.length, skippedPinned, skippedWhitelist, days: d };
+    return { ok: true, closed: verified.length, closedTabs, candidates: candidates.length, scanned: tabs.length, skippedPinned, skippedWhitelist, days: d };
   } catch (err) {
     console.warn(LOG_PREFIX, "closeIdleTabs remove failed:", err);
     return { ok: false, error: String(err?.message || err), closed: 0, candidates: candidates.length, scanned: tabs.length, skippedPinned, skippedWhitelist, days: d };

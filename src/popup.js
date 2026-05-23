@@ -937,7 +937,12 @@ async function wireCloseIdle() {
       const c = result.closed || 0;
       const sp = result.skippedPinned || 0;
       const suffix = sp > 0 ? ` (kept ${sp} pinned)` : "";
-      setStatus(c === 0 ? `Nothing to close${suffix}` : `Closed ${c} tab${c === 1 ? "" : "s"}${suffix}`, false);
+      if (c === 0) {
+        setStatus(`Nothing to close${suffix}`, false);
+      } else {
+        setStatus(suffix ? `Kept ${sp} pinned` : "", false);
+        showUndoToast(c, Array.isArray(result.closedTabs) ? result.closedTabs : []);
+      }
       // Re-render after a beat so the user sees the result, then refresh the list.
       setTimeout(() => { render().catch(() => {}); }, 150);
     } else {
@@ -1557,20 +1562,53 @@ function wireBulkSelect() {
     closeBtn.setAttribute("disabled", "true");
     setStatus("Closing…", false);
     const ids = Array.from(SELECTED);
-    const closed = await closeTabsByIds(ids);
+    const result = await closeTabsByIds(ids);
+    const closed = result?.count || 0;
     disarm();
     SELECTED.clear();
     closeBtn.removeAttribute("disabled");
-    setStatus(closed === 0 ? "Nothing closed" : `Closed ${closed} tab${closed === 1 ? "" : "s"}`, false);
+    if (closed === 0) {
+      setStatus("Nothing closed", false);
+    } else {
+      setStatus("", false);
+      showUndoToast(closed, result.closedTabs || []);
+    }
     // Stay in select mode but with an empty selection so the user can keep going.
     setTimeout(() => { render().catch(() => {}); }, 150);
   });
 }
 
-/** Close a list of tab IDs via chrome.tabs.remove. Returns the count closed. */
+/**
+ * Close a list of tab IDs via chrome.tabs.remove.
+ * Captures the closed tabs' metadata (url, pinned, heat signals) before the
+ * remove call so the caller can show an Undo toast. Returns
+ * { count, closedTabs } where closedTabs is the captured metadata array.
+ */
 async function closeTabsByIds(ids) {
   const clean = (Array.isArray(ids) ? ids : []).filter((n) => Number.isFinite(n));
-  if (clean.length === 0) return 0;
+  if (clean.length === 0) return { count: 0, closedTabs: [] };
+  // Snapshot tab data + heat signals before removal.
+  const [accessedResp, countsResp] = await Promise.all([
+    sendMessage(MSG.GET_LAST_ACCESSED),
+    sendMessage(MSG.GET_ACTIVATION_COUNTS),
+  ]);
+  const accessed = accessedResp?.map || {};
+  const counts = countsResp?.map || {};
+  const closedTabs = [];
+  await Promise.all(clean.map(async (id) => {
+    try {
+      const t = await chrome.tabs.get(id);
+      if (!t || !t.url) return;
+      closedTabs.push({
+        url: t.url,
+        title: t.title || "",
+        pinned: !!t.pinned,
+        windowId: t.windowId,
+        lastAccessed: typeof accessed[String(id)] === "number" ? accessed[String(id)] : (typeof t.lastAccessed === "number" ? t.lastAccessed : 0),
+        activations: typeof counts[String(id)] === "number" ? counts[String(id)] : 0,
+      });
+    } catch { /* tab gone, skip */ }
+  }));
   try {
     await new Promise((resolve) => {
       try {
@@ -1584,11 +1622,142 @@ async function closeTabsByIds(ids) {
         resolve();
       }
     });
-    return clean.length;
+    return { count: clean.length, closedTabs };
   } catch (err) {
     console.warn(LOG, "closeTabsByIds failed:", err);
-    return 0;
+    return { count: 0, closedTabs: [] };
   }
+}
+
+/**
+ * Toast notification with Undo for the last close action.
+ * Restores tabs via chrome.tabs.create and re-stamps their heat metadata via
+ * the background's th:restoreTabMeta channel so heat scores survive.
+ *
+ * Singleton: a new close action replaces the previous toast (and its undo
+ * buffer) — only the most recent close is undoable, by design.
+ */
+let TOAST_EL = null;
+let TOAST_HIDE_TIMER = 0;
+let TOAST_BUFFER = null; // { closedTabs: [...] }
+const TOAST_LIFETIME_MS = 8000;
+
+function ensureToastEl() {
+  if (TOAST_EL && document.body.contains(TOAST_EL)) return TOAST_EL;
+  const el = document.createElement("div");
+  el.className = "undo-toast";
+  el.setAttribute("role", "status");
+  el.setAttribute("aria-live", "polite");
+  el.innerHTML =
+    '<span class="undo-toast-icon" aria-hidden="true">' +
+      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' +
+        '<path d="M9 14L4 9l5-5"/>' +
+        '<path d="M4 9h11a5 5 0 015 5v0a5 5 0 01-5 5H9"/>' +
+      '</svg>' +
+    '</span>' +
+    '<span class="undo-toast-text" data-field="text"></span>' +
+    '<button type="button" class="undo-toast-btn" data-undo>Undo</button>' +
+    '<button type="button" class="undo-toast-close" aria-label="Dismiss" data-dismiss>' +
+      '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+        '<path d="M6 6l12 12M18 6L6 18"/>' +
+      '</svg>' +
+    '</button>';
+  document.body.appendChild(el);
+  el.addEventListener("click", (ev) => {
+    const target = ev.target instanceof Element ? ev.target : null;
+    if (!target) return;
+    if (target.closest("[data-undo]")) {
+      ev.preventDefault();
+      undoLastClose().catch((err) => console.warn(LOG, "undo failed:", err));
+    } else if (target.closest("[data-dismiss]")) {
+      ev.preventDefault();
+      hideUndoToast(true);
+    }
+  });
+  TOAST_EL = el;
+  return el;
+}
+
+function hideUndoToast(immediate) {
+  if (TOAST_HIDE_TIMER) { clearTimeout(TOAST_HIDE_TIMER); TOAST_HIDE_TIMER = 0; }
+  if (!TOAST_EL) return;
+  const apply = () => {
+    if (TOAST_EL) {
+      TOAST_EL.classList.remove("is-visible");
+      TOAST_EL.setAttribute("aria-hidden", "true");
+    }
+  };
+  if (immediate) apply();
+  else { TOAST_HIDE_TIMER = setTimeout(apply, 120); }
+}
+
+function showUndoToast(count, closedTabs) {
+  const n = Number(count) || 0;
+  const tabs = Array.isArray(closedTabs) ? closedTabs.filter((t) => t && typeof t.url === "string" && /^https?:|^file:|^ftp:/.test(t.url)) : [];
+  if (n <= 0) return;
+  TOAST_BUFFER = tabs.length > 0 ? { closedTabs: tabs } : null;
+  const tip = ensureToastEl();
+  const text = tip.querySelector('[data-field="text"]');
+  if (text) text.textContent = `Closed ${n} tab${n === 1 ? "" : "s"}`;
+  const undoBtn = tip.querySelector("[data-undo]");
+  if (undoBtn) {
+    // Disable Undo when we have no restorable URLs (e.g. chrome:// pages).
+    if (TOAST_BUFFER && TOAST_BUFFER.closedTabs.length > 0) {
+      undoBtn.removeAttribute("disabled");
+      undoBtn.classList.remove("is-disabled");
+    } else {
+      undoBtn.setAttribute("disabled", "true");
+      undoBtn.classList.add("is-disabled");
+    }
+  }
+  tip.classList.add("is-visible");
+  tip.setAttribute("aria-hidden", "false");
+  if (TOAST_HIDE_TIMER) { clearTimeout(TOAST_HIDE_TIMER); TOAST_HIDE_TIMER = 0; }
+  TOAST_HIDE_TIMER = setTimeout(() => hideUndoToast(false), TOAST_LIFETIME_MS);
+}
+
+async function undoLastClose() {
+  const buf = TOAST_BUFFER;
+  if (!buf || !Array.isArray(buf.closedTabs) || buf.closedTabs.length === 0) {
+    hideUndoToast(true);
+    return;
+  }
+  // Consume the buffer immediately so a double-click doesn't double-restore.
+  TOAST_BUFFER = null;
+  const undoBtn = TOAST_EL?.querySelector("[data-undo]");
+  if (undoBtn) undoBtn.setAttribute("disabled", "true");
+  const text = TOAST_EL?.querySelector('[data-field="text"]');
+  if (text) text.textContent = `Restoring${buf.closedTabs.length > 1 ? " " + buf.closedTabs.length + " tabs" : ""}\u2026`;
+  const metaEntries = [];
+  let opened = 0;
+  for (const t of buf.closedTabs) {
+    try {
+      const created = await chrome.tabs.create({
+        url: t.url,
+        active: false,
+        pinned: !!t.pinned,
+        windowId: typeof t.windowId === "number" ? t.windowId : undefined,
+      });
+      if (created && typeof created.id === "number") {
+        opened++;
+        metaEntries.push({
+          tabId: created.id,
+          lastAccessed: t.lastAccessed || 0,
+          activations: t.activations || 0,
+        });
+      }
+    } catch (err) {
+      console.warn(LOG, "undo create failed:", err, t.url);
+    }
+  }
+  if (metaEntries.length > 0) {
+    await sendMessage(MSG.RESTORE_TAB_META, { entries: metaEntries });
+  }
+  if (text) text.textContent = opened > 0 ? `Restored ${opened} tab${opened === 1 ? "" : "s"}` : "Nothing restored";
+  // Brief confirmation, then dismiss.
+  if (TOAST_HIDE_TIMER) { clearTimeout(TOAST_HIDE_TIMER); TOAST_HIDE_TIMER = 0; }
+  TOAST_HIDE_TIMER = setTimeout(() => hideUndoToast(false), 1600);
+  setTimeout(() => { render().catch(() => {}); }, 200);
 }
 
 // Expose for unit-style smoke tests in a non-extension runtime.
