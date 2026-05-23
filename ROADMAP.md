@@ -10,7 +10,7 @@ This file is the agent's task queue. Unchecked items get implemented in order. W
 - [x] One-click 'Close all tabs idle > N days'
 - [x] Configurable thresholds in options page
 - [x] Group tabs by host with rollup heat score
-- [ ] Export tab snapshot to JSON
+- [x] Export tab snapshot to JSON
 - [ ] Restore tab snapshot from JSON
 - [ ] Keyboard shortcut: jump to hottest tab
 - [ ] Pinned tabs always excluded from cold-close

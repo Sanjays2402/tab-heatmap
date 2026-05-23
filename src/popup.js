@@ -474,6 +474,103 @@ async function wireGroupToggle() {
   });
 }
 
+/**
+ * Build a JSON-serializable snapshot of all open tabs with heat metadata.
+ * Schema is versioned so the future import path can stay backwards-compatible.
+ */
+async function buildSnapshot() {
+  const [tabs, accessedResp, countsResp, settingsResp] = await Promise.all([
+    getAllTabs(),
+    sendMessage(MSG.GET_LAST_ACCESSED),
+    sendMessage(MSG.GET_ACTIVATION_COUNTS),
+    sendMessage(MSG.GET_SETTINGS),
+  ]);
+  const accessed = accessedResp?.map || {};
+  const counts = countsResp?.map || {};
+  const settings = settingsResp?.settings || {};
+  const rows = buildRows(tabs, accessed, counts);
+  const now = Date.now();
+  return {
+    schema: "tab-heatmap.snapshot",
+    version: 1,
+    exportedAt: new Date(now).toISOString(),
+    exportedAtMs: now,
+    settings: {
+      recencyHalfLifeMinutes: settings.recencyHalfLifeMinutes,
+      hotThreshold: settings.hotThreshold,
+      idleCloseDays: settings.idleCloseDays,
+    },
+    counts: {
+      tabs: rows.length,
+      windows: new Set(rows.map((r) => r.windowId)).size,
+      hot: rows.filter((r) => r.heat >= (settings.hotThreshold ?? HOT_THRESHOLD)).length,
+      pinned: rows.filter((r) => r.pinned).length,
+    },
+    tabs: rows.map((r) => ({
+      id: r.id,
+      windowId: r.windowId,
+      title: r.title,
+      url: r.url,
+      host: hostnameOf(r.url),
+      favIconUrl: r.favIconUrl || null,
+      pinned: r.pinned,
+      active: r.active,
+      lastAccessed: r.lastAccessed || null,
+      lastAccessedIso: r.lastAccessed ? new Date(r.lastAccessed).toISOString() : null,
+      activations: r.activations,
+      recency: Number(r.recency.toFixed(4)),
+      frequency: Number(r.frequency.toFixed(4)),
+      heat: Number(r.heat.toFixed(4)),
+    })),
+  };
+}
+
+/** Trigger a JSON file download from the popup. */
+function downloadJSON(filename, data) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.rel = "noopener";
+  document.body.appendChild(a);
+  a.click();
+  // Give the browser a tick to start the download before cleanup.
+  setTimeout(() => {
+    try { document.body.removeChild(a); } catch {}
+    try { URL.revokeObjectURL(url); } catch {}
+  }, 250);
+}
+
+/** Wire the "Export" button: builds snapshot JSON and triggers a download. */
+async function wireExport() {
+  const btn = document.getElementById("export-btn");
+  const status = document.getElementById("toolbar-status");
+  if (!btn) return;
+  function setStatus(text, warn) {
+    if (!status) return;
+    status.textContent = text || "";
+    status.classList.toggle("is-warn", !!warn);
+  }
+  btn.addEventListener("click", async (ev) => {
+    ev.preventDefault();
+    btn.setAttribute("disabled", "true");
+    setStatus("Exporting…", false);
+    try {
+      const snapshot = await buildSnapshot();
+      const stamp = new Date(snapshot.exportedAtMs).toISOString().replace(/[:.]/g, "-").replace("Z", "");
+      const filename = `tab-heatmap-snapshot-${stamp}.json`;
+      downloadJSON(filename, snapshot);
+      setStatus(`Exported ${snapshot.counts.tabs} tab${snapshot.counts.tabs === 1 ? "" : "s"}`, false);
+    } catch (err) {
+      console.warn(LOG, "export failed:", err);
+      setStatus("Export failed", true);
+    } finally {
+      btn.removeAttribute("disabled");
+    }
+  });
+}
+
 function applyGroupToggleVisual(btn) {
   btn.setAttribute("aria-pressed", GROUP_BY_HOST ? "true" : "false");
   btn.classList.toggle("is-active", GROUP_BY_HOST);
@@ -484,7 +581,8 @@ let GROUP_BY_HOST = false;
 applyTheme();
 wireSettings();
 wireCloseIdle().catch((err) => console.warn(LOG, "wireCloseIdle failed:", err));
+wireExport().catch((err) => console.warn(LOG, "wireExport failed:", err));
 wireGroupToggle().then(() => render()).catch((err) => console.warn(LOG, "render failed:", err));
 
 // Expose for unit-style smoke tests in a non-extension runtime.
-export { buildRows, recencyScore, frequencyScore, heatColor, groupRowsByHost };
+export { buildRows, recencyScore, frequencyScore, heatColor, groupRowsByHost, buildSnapshot };
