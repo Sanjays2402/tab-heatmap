@@ -1821,6 +1821,268 @@ async function wireImport() {
   });
 }
 
+/**
+ * Build a JSON snapshot of every open window (with its tabs, pins, groups,
+ * and heat metadata). Distinct from buildSnapshot() which only stores a flat
+ * tab list — session snapshots preserve window/group topology.
+ */
+async function buildSessionSnapshot() {
+  const [windows, accessedResp, countsResp, settingsResp] = await Promise.all([
+    chrome.windows.getAll({ populate: true }).catch(() => []),
+    sendMessage(MSG.GET_LAST_ACCESSED),
+    sendMessage(MSG.GET_ACTIVATION_COUNTS),
+    sendMessage(MSG.GET_SETTINGS),
+  ]);
+  const accessed = accessedResp?.map || {};
+  const counts = countsResp?.map || {};
+  const settings = settingsResp?.settings || {};
+
+  // Resolve tabGroups metadata (title/color/collapsed) once per session save.
+  const groupIds = new Set();
+  for (const w of windows) for (const t of (w.tabs || [])) {
+    if (typeof t.groupId === "number" && t.groupId > 0) groupIds.add(t.groupId);
+  }
+  const groupMeta = {};
+  if (groupIds.size && chrome.tabGroups?.get) {
+    await Promise.all([...groupIds].map(async (gid) => {
+      try {
+        const g = await chrome.tabGroups.get(gid);
+        groupMeta[gid] = { id: gid, title: g.title || "", color: g.color || "grey", collapsed: !!g.collapsed };
+      } catch {}
+    }));
+  }
+
+  const now = Date.now();
+  let tabCount = 0;
+  const winOut = windows.map((w) => {
+    const tabs = (w.tabs || []).slice().sort((a, b) => (a.index || 0) - (b.index || 0));
+    tabCount += tabs.length;
+    return {
+      id: w.id,
+      focused: !!w.focused,
+      incognito: !!w.incognito,
+      type: w.type || "normal",
+      state: w.state || "normal",
+      left: w.left ?? null,
+      top: w.top ?? null,
+      width: w.width ?? null,
+      height: w.height ?? null,
+      groups: [...new Set(tabs.map((t) => t.groupId).filter((g) => typeof g === "number" && g > 0))]
+        .map((gid) => groupMeta[gid] || { id: gid, title: "", color: "grey", collapsed: false }),
+      tabs: tabs.map((t) => ({
+        id: t.id,
+        title: t.title || "",
+        url: t.url || t.pendingUrl || "",
+        pinned: !!t.pinned,
+        active: !!t.active,
+        index: t.index ?? 0,
+        groupId: (typeof t.groupId === "number" && t.groupId > 0) ? t.groupId : null,
+        favIconUrl: t.favIconUrl || null,
+        lastAccessed: accessed[t.id] || 0,
+        activations: counts[t.id] || 0,
+      })),
+    };
+  });
+
+  return {
+    schema: "tab-heatmap.session",
+    version: 1,
+    exportedAt: new Date(now).toISOString(),
+    exportedAtMs: now,
+    settings: {
+      recencyHalfLifeMinutes: settings.recencyHalfLifeMinutes,
+      hotThreshold: settings.hotThreshold,
+      idleCloseDays: settings.idleCloseDays,
+    },
+    counts: { windows: winOut.length, tabs: tabCount },
+    windows: winOut,
+  };
+}
+
+/** Validate session snapshot JSON. */
+function parseSessionSnapshot(text) {
+  let data;
+  try { data = JSON.parse(text); } catch { throw new Error("Not valid JSON"); }
+  if (!data || typeof data !== "object") throw new Error("Empty session");
+  if (data.schema !== "tab-heatmap.session") throw new Error("Wrong schema");
+  if (!Array.isArray(data.windows)) throw new Error("Missing windows[]");
+  return data;
+}
+
+/**
+ * Restore a full session snapshot. For each saved window, open a new browser
+ * window with its first restorable URL, then append the remaining tabs in
+ * order, re-pinning and re-grouping as needed. Heat metadata is patched back
+ * via the SW so the restored tabs keep their warmth.
+ */
+async function restoreSessionSnapshot(snapshot) {
+  const wins = Array.isArray(snapshot.windows) ? snapshot.windows : [];
+  if (wins.length === 0) return { windows: 0, opened: 0, skipped: 0, groups: 0 };
+  const isRestorable = (u) => typeof u === "string" && /^(https?:|file:|ftp:)/.test(u);
+
+  let openedTotal = 0, skippedTotal = 0, groupsTotal = 0;
+  const metaEntries = [];
+
+  for (const w of wins) {
+    const tabs = Array.isArray(w.tabs) ? w.tabs : [];
+    const restorable = tabs.filter((t) => isRestorable(t.url));
+    skippedTotal += tabs.length - restorable.length;
+    if (restorable.length === 0) continue;
+
+    const first = restorable[0];
+    const rest = restorable.slice(1);
+
+    const winOpts = { url: first.url, focused: false, type: "normal" };
+    if (Number.isFinite(w.left)) winOpts.left = w.left;
+    if (Number.isFinite(w.top)) winOpts.top = w.top;
+    if (Number.isFinite(w.width)) winOpts.width = w.width;
+    if (Number.isFinite(w.height)) winOpts.height = w.height;
+    if (w.state === "minimized" || w.state === "maximized" || w.state === "fullscreen") winOpts.state = w.state;
+
+    let createdWin;
+    try {
+      createdWin = await chrome.windows.create(winOpts);
+    } catch (err) {
+      console.warn(LOG, "session: window.create failed:", err);
+      skippedTotal += restorable.length;
+      continue;
+    }
+    openedTotal++;
+
+    // The window was created with a single tab pre-loaded with `first.url`.
+    const firstTabId = createdWin?.tabs?.[0]?.id;
+    if (typeof firstTabId === "number") {
+      if (first.pinned) {
+        try { await chrome.tabs.update(firstTabId, { pinned: true }); } catch {}
+      }
+      metaEntries.push({ tabId: firstTabId, lastAccessed: first.lastAccessed || 0, activations: first.activations || 0 });
+    }
+
+    // Index tabs by old groupId so we can re-create groups after creation.
+    const tabIdsByOldGroup = new Map();
+    if (first.groupId && firstTabId) {
+      if (!tabIdsByOldGroup.has(first.groupId)) tabIdsByOldGroup.set(first.groupId, []);
+      tabIdsByOldGroup.get(first.groupId).push(firstTabId);
+    }
+
+    for (const t of rest) {
+      try {
+        const created = await chrome.tabs.create({
+          windowId: createdWin.id,
+          url: t.url,
+          active: false,
+          pinned: !!t.pinned,
+        });
+        openedTotal++;
+        if (typeof created.id === "number") {
+          metaEntries.push({ tabId: created.id, lastAccessed: t.lastAccessed || 0, activations: t.activations || 0 });
+          if (t.groupId) {
+            if (!tabIdsByOldGroup.has(t.groupId)) tabIdsByOldGroup.set(t.groupId, []);
+            tabIdsByOldGroup.get(t.groupId).push(created.id);
+          }
+        }
+      } catch (err) {
+        console.warn(LOG, "session: tabs.create failed:", err, t.url);
+        skippedTotal++;
+      }
+    }
+
+    // Re-create tab groups with their saved title/color/collapsed state.
+    const savedGroups = Array.isArray(w.groups) ? w.groups : [];
+    if (chrome.tabs?.group && chrome.tabGroups?.update) {
+      for (const sg of savedGroups) {
+        const ids = tabIdsByOldGroup.get(sg.id) || [];
+        if (ids.length === 0) continue;
+        try {
+          const newGroupId = await chrome.tabs.group({ tabIds: ids, createProperties: { windowId: createdWin.id } });
+          await chrome.tabGroups.update(newGroupId, {
+            title: sg.title || "",
+            color: sg.color || "grey",
+            collapsed: !!sg.collapsed,
+          });
+          groupsTotal++;
+        } catch (err) {
+          console.warn(LOG, "session: group restore failed:", err);
+        }
+      }
+    }
+  }
+
+  if (metaEntries.length > 0) {
+    await sendMessage(MSG.RESTORE_TAB_META, { entries: metaEntries });
+  }
+  return { windows: openedTotal > 0 ? wins.length : 0, opened: openedTotal, skipped: skippedTotal, groups: groupsTotal };
+}
+
+/** Wire the "Save session" button: downloads a full-window session snapshot. */
+async function wireSaveSession() {
+  const btn = document.getElementById("save-session-btn");
+  const status = document.getElementById("toolbar-status");
+  if (!btn) return;
+  function setStatus(text, warn) {
+    if (!status) return;
+    status.textContent = text || "";
+    status.classList.toggle("is-warn", !!warn);
+  }
+  btn.addEventListener("click", async (ev) => {
+    ev.preventDefault();
+    btn.setAttribute("disabled", "true");
+    setStatus("Saving session…", false);
+    try {
+      const snapshot = await buildSessionSnapshot();
+      const stamp = new Date(snapshot.exportedAtMs).toISOString().replace(/[:.]/g, "-").replace("Z", "");
+      const filename = `tab-heatmap-session-${stamp}.json`;
+      downloadJSON(filename, snapshot);
+      setStatus(`Saved ${snapshot.counts.windows} window${snapshot.counts.windows === 1 ? "" : "s"} · ${snapshot.counts.tabs} tab${snapshot.counts.tabs === 1 ? "" : "s"}`, false);
+    } catch (err) {
+      console.warn(LOG, "save session failed:", err);
+      setStatus("Save session failed", true);
+    } finally {
+      btn.removeAttribute("disabled");
+    }
+  });
+}
+
+/** Wire the "Restore session" button: pick a session JSON and reload it. */
+async function wireRestoreSession() {
+  const btn = document.getElementById("restore-session-btn");
+  const file = document.getElementById("restore-session-file");
+  const status = document.getElementById("toolbar-status");
+  if (!btn || !file) return;
+  function setStatus(text, warn) {
+    if (!status) return;
+    status.textContent = text || "";
+    status.classList.toggle("is-warn", !!warn);
+  }
+  btn.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    file.value = "";
+    file.click();
+  });
+  file.addEventListener("change", async () => {
+    const f = file.files && file.files[0];
+    if (!f) return;
+    btn.setAttribute("disabled", "true");
+    setStatus("Restoring session…", false);
+    try {
+      const text = await f.text();
+      const snapshot = parseSessionSnapshot(text);
+      const result = await restoreSessionSnapshot(snapshot);
+      const parts = [];
+      if (result.opened) parts.push(`opened ${result.opened}`);
+      if (result.groups) parts.push(`${result.groups} group${result.groups === 1 ? "" : "s"}`);
+      if (result.skipped) parts.push(`skipped ${result.skipped}`);
+      setStatus(parts.length ? `Session restored: ${parts.join(", ")}` : "Nothing to restore", false);
+      setTimeout(() => { render().catch(() => {}); }, 300);
+    } catch (err) {
+      console.warn(LOG, "restore session failed:", err);
+      setStatus(`Session restore failed: ${err?.message || "unknown"}`, true);
+    } finally {
+      btn.removeAttribute("disabled");
+    }
+  });
+}
+
 /** Wire the "Hottest" button: asks the SW to focus the hottest tab. */
 function wireJumpHottest() {
   const btn = document.getElementById("jump-hottest-btn");
@@ -1979,6 +2241,8 @@ wireSuspendIdle().catch((err) => console.warn(LOG, "wireSuspendIdle failed:", er
 wireCopyColdUrls().catch((err) => console.warn(LOG, "wireCopyColdUrls failed:", err));
 wireExport().catch((err) => console.warn(LOG, "wireExport failed:", err));
 wireImport().catch((err) => console.warn(LOG, "wireImport failed:", err));
+wireSaveSession().catch((err) => console.warn(LOG, "wireSaveSession failed:", err));
+wireRestoreSession().catch((err) => console.warn(LOG, "wireRestoreSession failed:", err));
 wireQuickChips().catch((err) => console.warn(LOG, "wireQuickChips failed:", err));
 wireJumpHottest();
 wireSearch();
@@ -2483,4 +2747,4 @@ async function wireGroupFilter() {
 }
 
 // Expose for unit-style smoke tests in a non-extension runtime.
-export { buildRows, recencyScore, frequencyScore, heatColor, groupRowsByHost, buildSnapshot, parseSnapshot, rowMatchesFilter, normalizeQuery, sortRows, sortGroups, formatRelativeTime, formatAbsoluteTime, formatCompactAge, formatAbsoluteAgo, bucketizeActivity, sparkPath, renderSparkSVG, computeHeatTrend, renderTrendSVG, buildHeatHistogram, HIST_BUCKETS, renderHeatMinimap, applyGroupFilter, tabGroupColorCss, collectColdTabs, writeClipboardText, countColdCandidates, countPinHotCandidates };
+export { buildRows, recencyScore, frequencyScore, heatColor, groupRowsByHost, buildSnapshot, parseSnapshot, buildSessionSnapshot, parseSessionSnapshot, rowMatchesFilter, normalizeQuery, sortRows, sortGroups, formatRelativeTime, formatAbsoluteTime, formatCompactAge, formatAbsoluteAgo, bucketizeActivity, sparkPath, renderSparkSVG, computeHeatTrend, renderTrendSVG, buildHeatHistogram, HIST_BUCKETS, renderHeatMinimap, applyGroupFilter, tabGroupColorCss, collectColdTabs, writeClipboardText, countColdCandidates, countPinHotCandidates };

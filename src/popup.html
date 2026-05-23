@@ -175,6 +175,23 @@
         <span class="action-label">Import</span>
       </button>
       <input id="import-file" type="file" accept="application/json,.json" hidden>
+      <button id="save-session-btn" class="action-btn action-btn--ghost" type="button" title="Save every open window and its tabs to a session snapshot">
+        <svg class="action-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M5 4h11l3 3v13a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1z"/>
+          <path d="M8 4v5h7V4"/>
+          <path d="M8 14h8v5H8z"/>
+        </svg>
+        <span class="action-label">Save session</span>
+      </button>
+      <button id="restore-session-btn" class="action-btn action-btn--ghost" type="button" title="Reload an entire saved window state (windows, tabs, groups, pins)">
+        <svg class="action-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M4 11a8 8 0 1115 4"/>
+          <path d="M4 5v6h6"/>
+          <path d="M12 8v5l3 2"/>
+        </svg>
+        <span class="action-label">Restore session</span>
+      </button>
+      <input id="restore-session-file" type="file" accept="application/json,.json" hidden>
       <span id="toolbar-status" class="toolbar-status" role="status" aria-live="polite"></span>
     </div>
     <div id="quick-chips" class="quick-chips" role="group" aria-label="Quick actions">
