@@ -34,3 +34,19 @@ if (!/jumpToHottestTab/.test(bg)) {
   process.exit(1);
 }
 
+// Pinned tabs must always be excluded from cold-close. The reaper must check
+// `pinned` both in the scan predicate and in a race-safe re-verify pass.
+if (!/isColdCloseCandidate/.test(bg)) {
+  console.error("background.js must define isColdCloseCandidate predicate");
+  process.exit(1);
+}
+const pinnedChecks = (bg.match(/\.pinned\b/g) || []).length;
+if (pinnedChecks < 2) {
+  console.error("background.js must guard pinned tabs in at least two places (scan + verify)");
+  process.exit(1);
+}
+if (!/chrome\.tabs\.get\(/.test(bg)) {
+  console.error("background.js must re-verify candidates with chrome.tabs.get before removal");
+  process.exit(1);
+}
+

@@ -13,7 +13,7 @@ This file is the agent's task queue. Unchecked items get implemented in order. W
 - [x] Export tab snapshot to JSON
 - [x] Restore tab snapshot from JSON
 - [x] Keyboard shortcut: jump to hottest tab
-- [ ] Pinned tabs always excluded from cold-close
+- [x] Pinned tabs always excluded from cold-close
 - [ ] Per-domain heat decay rate
 - [ ] Liquid-glass popup UI (frosted, Phosphor icons)
 - [ ] Dark/light theme with auto detection

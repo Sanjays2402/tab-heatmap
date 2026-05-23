@@ -70,17 +70,36 @@ function effectiveStamp(tab, accessedMap) {
 }
 
 /**
+ * Pure predicate: is this tab a valid candidate for the cold-close sweep?
+ * Pinned tabs are NEVER candidates — that invariant is enforced here AND
+ * re-checked immediately before chrome.tabs.remove to close the race where
+ * a user pins a tab between scan and reap.
+ */
+function isColdCloseCandidate(tab, accessedMap, nowMs, thresholdMs) {
+  if (!tab || typeof tab.id !== "number") return false;
+  if (tab.pinned === true) return false; // hard invariant — pinned is sacred.
+  if (tab.active === true) return false;
+  if (tab.audible === true) return false;
+  const stamp = effectiveStamp(tab, accessedMap);
+  // If we genuinely have no signal (stamp 0), don't reap — safer default.
+  if (stamp <= 0) return false;
+  return (nowMs - stamp) >= thresholdMs;
+}
+
+/**
  * Close every tab idle longer than `days` days.
- * Excludes: pinned tabs, the currently-active tab in each window, tabs with audio,
- * and tabs the user is currently dragging/loading. Returns a summary.
+ * Excludes: pinned tabs (always), the currently-active tab in each window,
+ * audible tabs, and tabs with no recorded access stamp. Pinned exclusion is
+ * enforced twice: during the initial scan and again right before removal, so
+ * a tab pinned mid-flight is preserved. Returns a summary.
  */
 async function closeIdleTabs(days) {
   const d = Number(days);
   if (!Number.isFinite(d) || d < 1) {
-    return { ok: false, error: "invalid_days", closed: 0, candidates: 0, scanned: 0 };
+    return { ok: false, error: "invalid_days", closed: 0, candidates: 0, scanned: 0, skippedPinned: 0 };
   }
   if (!chrome?.tabs?.query || !chrome?.tabs?.remove) {
-    return { ok: false, error: "tabs_api_unavailable", closed: 0, candidates: 0, scanned: 0 };
+    return { ok: false, error: "tabs_api_unavailable", closed: 0, candidates: 0, scanned: 0, skippedPinned: 0 };
   }
   const thresholdMs = d * 24 * 60 * 60 * 1000;
   const now = Date.now();
@@ -88,28 +107,39 @@ async function closeIdleTabs(days) {
     chrome.tabs.query({}),
     readLastAccessed(),
   ]);
-  const toClose = [];
+  const candidates = [];
   for (const t of tabs) {
-    if (!t || typeof t.id !== "number") continue;
-    if (t.pinned) continue;
-    if (t.active) continue;
-    if (t.audible) continue;
-    const stamp = effectiveStamp(t, accessed);
-    // If we genuinely have no signal (stamp 0), don't reap — safer default.
-    if (stamp <= 0) continue;
-    if (now - stamp >= thresholdMs) toClose.push(t.id);
+    if (isColdCloseCandidate(t, accessed, now, thresholdMs)) candidates.push(t.id);
   }
-  if (toClose.length === 0) {
-    return { ok: true, closed: 0, candidates: 0, scanned: tabs.length, days: d };
+  if (candidates.length === 0) {
+    return { ok: true, closed: 0, candidates: 0, scanned: tabs.length, skippedPinned: 0, days: d };
+  }
+  // Race-safe second pass: re-fetch each candidate by id and drop anything
+  // that was pinned (or vanished) between the scan and now. This makes the
+  // "pinned never closes" invariant robust even under user-concurrent edits.
+  const verified = [];
+  let skippedPinned = 0;
+  await Promise.all(candidates.map(async (id) => {
+    try {
+      const fresh = await chrome.tabs.get(id);
+      if (!fresh) return;
+      if (fresh.pinned === true) { skippedPinned++; return; }
+      verified.push(id);
+    } catch {
+      // tab gone — silently skip.
+    }
+  }));
+  if (verified.length === 0) {
+    return { ok: true, closed: 0, candidates: candidates.length, scanned: tabs.length, skippedPinned, days: d };
   }
   try {
-    await chrome.tabs.remove(toClose);
+    await chrome.tabs.remove(verified);
     // Best-effort cleanup of our maps; onRemoved listeners will catch most cases too.
-    await Promise.all(toClose.map((id) => forgetTab(id)));
-    return { ok: true, closed: toClose.length, candidates: toClose.length, scanned: tabs.length, days: d };
+    await Promise.all(verified.map((id) => forgetTab(id)));
+    return { ok: true, closed: verified.length, candidates: candidates.length, scanned: tabs.length, skippedPinned, days: d };
   } catch (err) {
     console.warn(LOG_PREFIX, "closeIdleTabs remove failed:", err);
-    return { ok: false, error: String(err?.message || err), closed: 0, candidates: toClose.length, scanned: tabs.length, days: d };
+    return { ok: false, error: String(err?.message || err), closed: 0, candidates: candidates.length, scanned: tabs.length, skippedPinned, days: d };
   }
 }
 

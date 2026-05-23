@@ -447,7 +447,9 @@ async function wireCloseIdle() {
     disarm();
     if (result?.ok) {
       const c = result.closed || 0;
-      setStatus(c === 0 ? "Nothing to close" : `Closed ${c} tab${c === 1 ? "" : "s"}`, false);
+      const sp = result.skippedPinned || 0;
+      const suffix = sp > 0 ? ` (kept ${sp} pinned)` : "";
+      setStatus(c === 0 ? `Nothing to close${suffix}` : `Closed ${c} tab${c === 1 ? "" : "s"}${suffix}`, false);
       // Re-render after a beat so the user sees the result, then refresh the list.
       setTimeout(() => { render().catch(() => {}); }, 150);
     } else {
