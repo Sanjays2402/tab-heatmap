@@ -673,6 +673,22 @@ body {
 }
 .action-btn--ghost.is-active .action-icon { color: var(--accent); }
 
+/* Group filter — reuses sort-control styling but adds a color swatch */
+.group-filter-control {
+  position: relative;
+}
+.group-filter-swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-dim);
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.18);
+  margin: 0 2px 0 -2px;
+  flex: 0 0 8px;
+  transition: background 200ms var(--ease);
+}
+
 /* Sort control — pill that wraps a native <select> */
 .sort-control {
   display: inline-flex;

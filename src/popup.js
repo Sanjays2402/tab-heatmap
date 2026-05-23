@@ -834,12 +834,23 @@ async function render() {
     : {};
   applyTheme(settings.theme);
 
+  // Hydrate tab-group metadata so we can render the group filter and color
+  // swatches. tabGroups may not exist in non-Chromium runtimes — handle gracefully.
+  TAB_GROUPS_BY_ID = await getTabGroupsMap();
+  populateGroupFilterOptions(tabs);
+
   const rows = buildRows(tabs, accessedResp.map || {}, countsResp.map || {}, sparkResp?.map || {}, openedResp?.map || {});
+  // Stamp groupId on each row from the source tab list so the filter can
+  // match against chrome.tabGroups membership without another round-trip.
+  const tabIdToGroup = new Map();
+  for (const t of tabs) if (t && typeof t.id === "number") tabIdToGroup.set(t.id, typeof t.groupId === "number" ? t.groupId : -1);
+  for (const r of rows) r.groupId = tabIdToGroup.has(r.id) ? tabIdToGroup.get(r.id) : -1;
   const sortedAll = sortRows(rows, SORT_MODE);
   const allRows = sortedAll;
   renderHeatHistogram(allRows);
   const q = FILTER_QUERY;
-  const filtered = q ? sortedAll.filter((r) => rowMatchesFilter(r, q)) : sortedAll;
+  const groupFiltered = applyGroupFilter(sortedAll);
+  const filtered = q ? groupFiltered.filter((r) => rowMatchesFilter(r, q)) : groupFiltered;
   const list = document.getElementById("tab-list");
   const empty = document.getElementById("empty-state");
   const noMatches = document.getElementById("no-matches");
@@ -1404,6 +1415,10 @@ function applyGroupToggleVisual(btn) {
 let GROUP_BY_HOST = false;
 let FILTER_QUERY = "";
 let SORT_MODE = "heat";
+// Chrome tab-group id to filter by, or "all" for no filter, or "none" for ungrouped tabs.
+let GROUP_FILTER = "all";
+// Cached map of tabGroups.Group keyed by id, refreshed on each render.
+let TAB_GROUPS_BY_ID = new Map();
 let SELECT_MODE = false;
 /** @type {Set<number>} ids of tabs currently selected in bulk-select mode. */
 const SELECTED = new Set();
@@ -1472,6 +1487,7 @@ function highlightInto(el, text, query) {
 
 applyTheme();
 wireSettings();
+wireGroupFilter().catch((err) => console.warn(LOG, "wireGroupFilter failed:", err));
 wireCloseIdle().catch((err) => console.warn(LOG, "wireCloseIdle failed:", err));
 wireSuspendIdle().catch((err) => console.warn(LOG, "wireSuspendIdle failed:", err));
 wireExport().catch((err) => console.warn(LOG, "wireExport failed:", err));
@@ -1820,5 +1836,163 @@ async function undoLastClose() {
   setTimeout(() => { render().catch(() => {}); }, 200);
 }
 
+/**
+ * Fetch all current tab groups across windows as Map<groupId, group>.
+ * Returns an empty map when the tabGroups API is unavailable (non-Chromium).
+ */
+async function getTabGroupsMap() {
+  const out = new Map();
+  try {
+    if (!chrome.tabGroups || typeof chrome.tabGroups.query !== "function") return out;
+    const groups = await new Promise((resolve) => {
+      try {
+        chrome.tabGroups.query({}, (gs) => {
+          if (chrome.runtime.lastError) { resolve([]); return; }
+          resolve(Array.isArray(gs) ? gs : []);
+        });
+      } catch { resolve([]); }
+    });
+    for (const g of groups) if (g && typeof g.id === "number") out.set(g.id, g);
+  } catch (err) {
+    console.warn(LOG, "getTabGroupsMap failed:", err);
+  }
+  return out;
+}
+
+/** Map a Chrome group color name to a CSS color (matches Chrome's palette). */
+function tabGroupColorCss(name) {
+  switch (name) {
+    case "grey":   return "#5f6368";
+    case "blue":   return "#1a73e8";
+    case "red":    return "#d93025";
+    case "yellow": return "#f9ab00";
+    case "green":  return "#188038";
+    case "pink":   return "#d01884";
+    case "purple": return "#9334e6";
+    case "cyan":   return "#007b83";
+    case "orange": return "#fa7b17";
+    default:       return "var(--fg-dim)";
+  }
+}
+
+/** Populate the group-filter <select> from the current tab list + group metadata. */
+function populateGroupFilterOptions(tabs) {
+  const control = document.getElementById("group-filter-control");
+  const sel = document.getElementById("group-filter-select");
+  const swatch = document.getElementById("group-filter-swatch");
+  if (!control || !sel) return;
+
+  // Count tabs per group id present in this window-set so we only show
+  // groups that have at least one tab. groupId === -1 means "no group".
+  const counts = new Map();
+  let ungrouped = 0;
+  for (const t of tabs) {
+    if (!t || typeof t.id !== "number") continue;
+    const gid = typeof t.groupId === "number" ? t.groupId : -1;
+    if (gid === -1) { ungrouped++; continue; }
+    counts.set(gid, (counts.get(gid) || 0) + 1);
+  }
+
+  // Hide the control entirely when there are no groups — saves toolbar space.
+  if (counts.size === 0) {
+    control.classList.add("hidden");
+    if (GROUP_FILTER !== "all") {
+      GROUP_FILTER = "all";
+      try { chrome.storage?.local?.set?.({ "th:groupFilter": "all" }); } catch {}
+    }
+    return;
+  }
+  control.classList.remove("hidden");
+
+  // Rebuild options: All groups, Ungrouped (if any), then each named group.
+  const prev = GROUP_FILTER;
+  sel.innerHTML = "";
+  const optAll = document.createElement("option");
+  optAll.value = "all";
+  optAll.textContent = `All groups (${tabs.length})`;
+  sel.appendChild(optAll);
+  if (ungrouped > 0) {
+    const optNone = document.createElement("option");
+    optNone.value = "none";
+    optNone.textContent = `Ungrouped (${ungrouped})`;
+    sel.appendChild(optNone);
+  }
+  // Sort groups by name (fall back to id) for a stable order.
+  const entries = Array.from(counts.entries()).map(([gid, n]) => {
+    const g = TAB_GROUPS_BY_ID.get(gid) || {};
+    return { gid, count: n, title: g.title || "", color: g.color || "grey" };
+  });
+  entries.sort((a, b) => {
+    const at = (a.title || `Group ${a.gid}`).toLowerCase();
+    const bt = (b.title || `Group ${b.gid}`).toLowerCase();
+    return at.localeCompare(bt) || a.gid - b.gid;
+  });
+  for (const e of entries) {
+    const opt = document.createElement("option");
+    opt.value = String(e.gid);
+    const label = e.title || `Group ${e.gid}`;
+    opt.textContent = `${label} (${e.count})`;
+    opt.dataset.color = e.color;
+    sel.appendChild(opt);
+  }
+
+  // If the previously selected group disappeared, fall back to "all".
+  const validValues = new Set(Array.from(sel.options).map((o) => o.value));
+  const next = validValues.has(prev) ? prev : "all";
+  if (next !== GROUP_FILTER) {
+    GROUP_FILTER = next;
+    try { chrome.storage?.local?.set?.({ "th:groupFilter": next }); } catch {}
+  }
+  sel.value = GROUP_FILTER;
+
+  // Color swatch reflects the active selection.
+  if (swatch) {
+    if (GROUP_FILTER === "all" || GROUP_FILTER === "none") {
+      swatch.style.display = "none";
+    } else {
+      const g = TAB_GROUPS_BY_ID.get(Number(GROUP_FILTER));
+      swatch.style.display = "";
+      swatch.style.background = tabGroupColorCss(g?.color || "grey");
+    }
+  }
+}
+
+/** Filter rows by the active group-filter selection. */
+function applyGroupFilter(rows) {
+  if (!Array.isArray(rows)) return [];
+  if (GROUP_FILTER === "all") return rows;
+  if (GROUP_FILTER === "none") return rows.filter((r) => !Number.isFinite(r.groupId) || r.groupId === -1);
+  const gid = Number(GROUP_FILTER);
+  if (!Number.isFinite(gid)) return rows;
+  return rows.filter((r) => r.groupId === gid);
+}
+
+/** Hydrate persisted group-filter choice and wire the <select> change event. */
+async function wireGroupFilter() {
+  const sel = document.getElementById("group-filter-select");
+  if (!sel) return;
+  try {
+    const stored = await new Promise((resolve) => {
+      chrome.storage?.local?.get?.(["th:groupFilter"], (items) => resolve(items || {}));
+    });
+    const v = stored["th:groupFilter"];
+    if (typeof v === "string") GROUP_FILTER = v;
+  } catch {}
+  sel.addEventListener("change", () => {
+    GROUP_FILTER = sel.value || "all";
+    try { chrome.storage?.local?.set?.({ "th:groupFilter": GROUP_FILTER }); } catch {}
+    render().catch((err) => console.warn(LOG, "group-filter re-render failed:", err));
+  });
+  // React in real time to Chrome group changes (rename, color, add/remove).
+  try {
+    chrome.tabGroups?.onUpdated?.addListener(() => { render().catch(() => {}); });
+    chrome.tabGroups?.onRemoved?.addListener(() => { render().catch(() => {}); });
+    chrome.tabGroups?.onCreated?.addListener(() => { render().catch(() => {}); });
+    chrome.tabs?.onUpdated?.addListener((_id, info) => {
+      if (info && "groupId" in info) render().catch(() => {});
+    });
+  } catch {}
+}
+
 // Expose for unit-style smoke tests in a non-extension runtime.
-export { buildRows, recencyScore, frequencyScore, heatColor, groupRowsByHost, buildSnapshot, parseSnapshot, rowMatchesFilter, normalizeQuery, sortRows, sortGroups, formatRelativeTime, formatAbsoluteTime, formatCompactAge, formatAbsoluteAgo, bucketizeActivity, sparkPath, renderSparkSVG, buildHeatHistogram, HIST_BUCKETS };
+export { buildRows, recencyScore, frequencyScore, heatColor, groupRowsByHost, buildSnapshot, parseSnapshot, rowMatchesFilter, normalizeQuery, sortRows, sortGroups, formatRelativeTime, formatAbsoluteTime, formatCompactAge, formatAbsoluteAgo, bucketizeActivity, sparkPath, renderSparkSVG, buildHeatHistogram, HIST_BUCKETS, applyGroupFilter, tabGroupColorCss };
