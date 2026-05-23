@@ -11,6 +11,7 @@ const MSG = Object.freeze({
   PING: "th:ping",
   JUMP_HOTTEST: "th:jumpHottest",
   GET_LAST_ACCESSED: "th:getLastAccessed",
+  MARK_HOT: "th:markHot",
   GET_ACTIVATION_COUNTS: "th:getActivationCounts",
   GET_ACTIVITY_SPARK: "th:getActivitySpark",
   CLOSE_IDLE: "th:closeIdle",
@@ -313,6 +314,59 @@ async function bumpActivation(tabId) {
   }
 }
 
+/**
+ * Manually boost a tab so it scores as the hottest in the list.
+ * Stamps last-accessed to now (recency = 1.0) and raises the activation
+ * count above the current max so frequency saturates too. The net heat is
+ * effectively 1.0 under the popup's 0.6*recency + 0.4*frequency model.
+ */
+async function markTabHot(tabId, ts = Date.now()) {
+  if (typeof tabId !== "number" || tabId < 0) {
+    return { ok: false, error: "invalid_tab_id" };
+  }
+  try {
+    const [accessed, counts, spark] = await Promise.all([
+      readLastAccessed(),
+      readActivationCounts(),
+      readActivitySpark(),
+    ]);
+    const key = String(tabId);
+    // Find the current max activation count across all tracked tabs so the
+    // boosted tab lands strictly above it, regardless of prior usage.
+    let maxCount = 0;
+    for (const v of Object.values(counts)) {
+      if (typeof v === "number" && v > maxCount) maxCount = v;
+    }
+    const cur = typeof counts[key] === "number" ? counts[key] : 0;
+    // Boost: at least +5 over the previous max, and always +5 over the tab's
+    // own prior count, so repeated boosts still notch upward.
+    const boosted = Math.max(maxCount + 5, cur + 5);
+    accessed[key] = ts;
+    counts[key] = boosted;
+    // Also append a sparkline sample so the recent-activity chart reflects
+    // the manual interaction, not just background-detected events.
+    const cutoff = ts - SPARK_WINDOW_MS;
+    const prev = Array.isArray(spark[key]) ? spark[key] : [];
+    const next = [];
+    for (const v of prev) if (typeof v === "number" && v >= cutoff) next.push(v);
+    next.push(ts);
+    if (next.length > SPARK_MAX_SAMPLES) next.splice(0, next.length - SPARK_MAX_SAMPLES);
+    spark[key] = next;
+    await chrome.storage.session.set({
+      [LAST_ACCESSED_KEY]: accessed,
+      [ACTIVATION_COUNT_KEY]: counts,
+      [ACTIVITY_SPARK_KEY]: spark,
+    });
+    // Boosting a tab can pull it out of the cold set, so recompute the badge
+    // promptly instead of waiting for the next debounced tick.
+    if (typeof scheduleBadgeRefresh === "function") scheduleBadgeRefresh(50);
+    return { ok: true, tabId, activations: boosted, stamp: ts };
+  } catch (err) {
+    console.warn(LOG_PREFIX, "markTabHot failed:", err);
+    return { ok: false, error: String(err?.message || err) };
+  }
+}
+
 /** Drop a tab id from the maps when it closes. */
 async function forgetTab(tabId) {
   try {
@@ -564,6 +618,22 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     jumpToHottestTab().then(sendResponse);
     return true;
   }
+  if (msg.type === MSG.MARK_HOT) {
+    (async () => {
+      // Accept an explicit tabId; otherwise fall back to the active tab in
+      // the focused window so the popup can fire-and-forget without lookups.
+      let tabId = Number(msg?.tabId);
+      if (!Number.isFinite(tabId) || tabId < 0) {
+        try {
+          const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+          tabId = active?.id;
+        } catch { /* ignore */ }
+      }
+      const res = await markTabHot(tabId);
+      sendResponse(res);
+    })();
+    return true;
+  }
   if (msg.type === MSG.CLOSE_IDLE) {
     (async () => {
       const requested = Number(msg?.days);
@@ -674,5 +744,47 @@ chrome.runtime.onStartup.addListener(() => { ensureBadgeAlarm(); scheduleBadgeRe
 // kick to render the badge against the current tab state.
 ensureBadgeAlarm();
 scheduleBadgeRefresh(500);
+
+/**
+ * Context menu: "Mark tab as hot". Registered on install + startup so the
+ * entry survives SW eviction. Fires markTabHot() against the clicked tab.
+ */
+const CTX_MARK_HOT_ID = "th:markHot";
+async function ensureContextMenus() {
+  try {
+    if (!chrome?.contextMenus?.create) return;
+    // removeAll → create avoids the "duplicate id" error that fires when both
+    // onInstalled and onStartup run during the same SW lifetime.
+    await new Promise((resolve) => {
+      try { chrome.contextMenus.removeAll(() => resolve()); }
+      catch { resolve(); }
+    });
+    chrome.contextMenus.create({
+      id: CTX_MARK_HOT_ID,
+      title: "Mark tab as hot \u2014 Tab Heatmap",
+      // "page" covers the page body; "frame" picks up iframes; "link/image/
+      // selection" make the entry reachable from common right-click contexts.
+      contexts: ["page", "frame", "link", "image", "selection"],
+    });
+  } catch (err) {
+    console.warn(LOG_PREFIX, "ensureContextMenus failed:", err);
+  }
+}
+if (chrome?.contextMenus?.onClicked) {
+  chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+    if (info?.menuItemId !== CTX_MARK_HOT_ID) return;
+    const tabId = typeof tab?.id === "number" ? tab.id : undefined;
+    if (typeof tabId !== "number") {
+      console.warn(LOG_PREFIX, "context menu click with no tab id");
+      return;
+    }
+    const res = await markTabHot(tabId);
+    if (!res.ok) console.warn(LOG_PREFIX, "markTabHot via context menu:", res.error);
+  });
+}
+chrome.runtime.onInstalled.addListener(() => { ensureContextMenus(); });
+chrome.runtime.onStartup.addListener(() => { ensureContextMenus(); });
+// And on cold SW boot, in case neither lifecycle event fires this tick.
+ensureContextMenus();
 
 console.log(LOG_PREFIX, "service worker booted");

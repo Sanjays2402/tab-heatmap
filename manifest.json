@@ -6,7 +6,8 @@
   "permissions": [
     "tabs",
     "storage",
-    "alarms"
+    "alarms",
+    "contextMenus"
   ],
   "host_permissions": [],
   "action": {
