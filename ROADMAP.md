@@ -37,3 +37,13 @@ This file is the agent's task queue. Unchecked items get implemented in order. W
 - [x] Heat trend arrow (rising/falling) next to each tab
 - [x] Quick-action chips in popup: Close Cold, Suspend Cold, Pin Hot
 - [x] Per-window heat scoreboard in popup header
+- [ ] Heatmap mini-map: visual grid of all tabs colored by heat
+- [ ] Session restore: save and reload entire window state from snapshot
+- [ ] Auto-suspend rule: discard tabs cold for > configurable hours
+- [ ] Tab clustering: group similar-domain tabs into collapsible sections
+- [ ] CSV export of tab usage stats over time
+- [ ] Weekly digest view: top 10 hottest and coldest tabs of the week
+- [ ] Drag-to-reorder tab priority within popup
+- [ ] Focus mode: dim all tabs except the top-N hottest
+- [ ] Custom accent color picker in options page
+- [ ] Onboarding tour: first-run highlight of popup features
