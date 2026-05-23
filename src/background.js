@@ -17,6 +17,7 @@ const MSG = Object.freeze({
   GET_SETTINGS: "th:getSettings",
   SET_SETTINGS: "th:setSettings",
   RESTORE_TAB_META: "th:restoreTabMeta",
+  RESET_HEAT_DATA: "th:resetHeatData",
 });
 
 /** Default settings. Persisted in chrome.storage.local under SETTINGS_KEY. */
@@ -531,6 +532,26 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         });
         sendResponse({ ok: true, touched });
       } catch (err) {
+        sendResponse({ ok: false, error: String(err?.message || err) });
+      }
+    })();
+    return true;
+  }
+  if (msg.type === MSG.RESET_HEAT_DATA) {
+    (async () => {
+      try {
+        // Wipe every tracked map so heat scores fall to zero everywhere.
+        await chrome.storage.session.remove([
+          LAST_ACCESSED_KEY,
+          ACTIVATION_COUNT_KEY,
+          ACTIVITY_SPARK_KEY,
+        ]);
+        // Reseed from currently-open tabs so the popup doesn't render an
+        // empty list — every tab starts fresh from "now".
+        await seedFromOpenTabs();
+        sendResponse({ ok: true, resetAt: Date.now() });
+      } catch (err) {
+        console.warn(LOG_PREFIX, "resetHeatData failed:", err);
         sendResponse({ ok: false, error: String(err?.message || err) });
       }
     })();

@@ -6,6 +6,7 @@ const LOG = "[tab-heatmap:options]";
 const MSG = Object.freeze({
   GET_SETTINGS: "th:getSettings",
   SET_SETTINGS: "th:setSettings",
+  RESET_HEAT_DATA: "th:resetHeatData",
 });
 
 const DEFAULTS = Object.freeze({
@@ -412,11 +413,64 @@ function resetDefaults() {
   markDirty();
 }
 
+/** Two-step confirm flow for wiping all tracked heat data. */
+function wireResetHeatData() {
+  const btn = document.getElementById("reset-data-btn");
+  const confirm = document.getElementById("reset-data-confirm");
+  const cancel = document.getElementById("reset-data-cancel");
+  const yes = document.getElementById("reset-data-yes");
+  const status = document.getElementById("reset-data-status");
+  if (!btn || !confirm || !cancel || !yes) return;
+
+  const setLocalStatus = (text, tone) => {
+    if (!status) return;
+    status.textContent = text || "";
+    status.classList.toggle("is-ok", tone === "ok");
+    status.classList.toggle("is-warn", tone === "warn");
+  };
+
+  const hide = () => {
+    confirm.hidden = true;
+    btn.removeAttribute("disabled");
+  };
+
+  btn.addEventListener("click", () => {
+    confirm.hidden = false;
+    btn.setAttribute("disabled", "true");
+    setLocalStatus("", "");
+    // Focus the safer option by default so accidental Enter cancels.
+    cancel.focus();
+  });
+  cancel.addEventListener("click", () => {
+    hide();
+    btn.focus();
+  });
+  yes.addEventListener("click", async () => {
+    yes.setAttribute("disabled", "true");
+    cancel.setAttribute("disabled", "true");
+    setLocalStatus("Wiping…", "");
+    const resp = await sendMessage(MSG.RESET_HEAT_DATA);
+    yes.removeAttribute("disabled");
+    cancel.removeAttribute("disabled");
+    if (resp && resp.ok) {
+      hide();
+      setLocalStatus("Heat data wiped. Tabs reseeded from now.", "ok");
+      setTimeout(() => setLocalStatus("", ""), 2400);
+    } else {
+      setLocalStatus("Reset failed", "warn");
+    }
+  });
+  confirm.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") { ev.preventDefault(); hide(); btn.focus(); }
+  });
+}
+
 els.save?.addEventListener("click", () => { save().catch((err) => { console.warn(LOG, err); setStatus("Save failed", "warn"); }); });
 els.reset?.addEventListener("click", resetDefaults);
 wireDomainAdd();
 wireWhitelistAdd();
 wireThemeSeg();
+wireResetHeatData();
 
 load().catch((err) => { console.warn(LOG, "load failed:", err); setStatus("Failed to load settings", "warn"); });
 

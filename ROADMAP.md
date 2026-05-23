@@ -23,7 +23,7 @@ This file is the agent's task queue. Unchecked items get implemented in order. W
 - [x] Bulk-select tabs with checkboxes and close selected
 - [x] Heat-score sparkline (last 24h activity per tab)
 - [x] Whitelist domains never to mark as cold
-- [ ] Settings: reset all heat data with confirmation
+- [x] Settings: reset all heat data with confirmation
 - [ ] Badge on extension icon showing count of cold tabs
 - [ ] Context menu: 'Mark tab as hot' to boost heat manually
 - [ ] Audible/muted tab indicator in popup list

@@ -371,3 +371,71 @@ input[type="range"]::-moz-range-thumb {
   border: 1px solid color-mix(in oklab, var(--accent) 30%, var(--line));
 }
 .whitelist-badge svg { display: block; }
+
+/* Danger zone — reset heat data */
+.card-danger {
+  border-color: color-mix(in oklab, #ff3b2f 24%, var(--line));
+}
+.card-danger:hover { border-color: color-mix(in oklab, #ff3b2f 38%, var(--line)); }
+.card-danger .card-icon { color: color-mix(in oklab, #ff3b2f 80%, var(--fg)); }
+.reset-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.reset-status { flex: 1 1 auto; font-size: 12.5px; }
+.btn-danger {
+  color: color-mix(in oklab, #ff3b2f 72%, var(--fg));
+  border-color: color-mix(in oklab, #ff3b2f 30%, var(--line));
+  background:
+    linear-gradient(135deg, color-mix(in oklab, #ff3b2f 14%, transparent), transparent 65%),
+    var(--glass-hi);
+}
+.btn-danger:hover {
+  color: color-mix(in oklab, #ff3b2f 90%, var(--fg));
+  border-color: color-mix(in oklab, #ff3b2f 55%, var(--line));
+}
+.btn-danger-solid {
+  color: #fff;
+  border-color: color-mix(in oklab, #ff3b2f 65%, transparent);
+  background:
+    linear-gradient(135deg, color-mix(in oklab, #ff3b2f 65%, transparent), color-mix(in oklab, #ff3b2f 45%, transparent)),
+    var(--glass-hi);
+}
+.btn-danger-solid:hover {
+  background:
+    linear-gradient(135deg, color-mix(in oklab, #ff3b2f 78%, transparent), color-mix(in oklab, #ff3b2f 55%, transparent)),
+    var(--glass-hi);
+}
+.btn[disabled], .btn[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
+.reset-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 12px;
+  background:
+    linear-gradient(135deg, color-mix(in oklab, #ff3b2f 10%, transparent), transparent 70%),
+    var(--glass-hi);
+  border: 1px solid color-mix(in oklab, #ff3b2f 28%, var(--line));
+  animation: reset-fade 220ms var(--ease);
+}
+.reset-confirm[hidden] { display: none; }
+.reset-confirm-msg {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--fg);
+}
+.reset-confirm-msg svg { color: color-mix(in oklab, #ff3b2f 80%, var(--fg)); flex: 0 0 16px; }
+.reset-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+@keyframes reset-fade {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
