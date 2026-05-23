@@ -9,7 +9,7 @@ This file is the agent's task queue. Unchecked items get implemented in order. W
 - [x] Color gradient: cold blue → warm amber → hot red
 - [x] One-click 'Close all tabs idle > N days'
 - [x] Configurable thresholds in options page
-- [ ] Group tabs by host with rollup heat score
+- [x] Group tabs by host with rollup heat score
 - [ ] Export tab snapshot to JSON
 - [ ] Restore tab snapshot from JSON
 - [ ] Keyboard shortcut: jump to hottest tab

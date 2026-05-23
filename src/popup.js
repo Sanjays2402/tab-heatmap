@@ -211,6 +211,86 @@ async function focusTab(tabId, windowId) {
   }
 }
 
+/**
+ * Group rows by hostname and compute a rollup heat per host.
+ * Rollup = max(child heat) — "hottest sub-tab wins". We also expose
+ * avg + sum for UI subtitles. Children stay sorted hot→cold.
+ * Returns groups sorted by rollup heat (hot hosts at top).
+ */
+function groupRowsByHost(rows) {
+  const map = new Map();
+  for (const row of rows) {
+    const host = hostnameOf(row.url) || "(local)";
+    let g = map.get(host);
+    if (!g) {
+      g = { host, rows: [], maxHeat: 0, sumHeat: 0, sumRecency: 0, sumFreq: 0, activations: 0 };
+      map.set(host, g);
+    }
+    g.rows.push(row);
+    g.maxHeat = Math.max(g.maxHeat, row.heat);
+    g.sumHeat += row.heat;
+    g.sumRecency += row.recency;
+    g.sumFreq += row.frequency;
+    g.activations += row.activations || 0;
+  }
+  const groups = [];
+  for (const g of map.values()) {
+    g.rows.sort((a, b) => b.heat - a.heat);
+    g.avgHeat = g.rows.length ? g.sumHeat / g.rows.length : 0;
+    g.avgRecency = g.rows.length ? g.sumRecency / g.rows.length : 0;
+    g.avgFreq = g.rows.length ? g.sumFreq / g.rows.length : 0;
+    g.heat = g.maxHeat; // rollup
+    groups.push(g);
+  }
+  groups.sort((a, b) => b.heat - a.heat || b.rows.length - a.rows.length);
+  return groups;
+}
+
+/** Render a single host-group header + its children into `parent`. */
+function appendGroup(parent, group, expanded) {
+  const section = document.createElement("li");
+  section.className = "tab-group" + (expanded ? " is-open" : "");
+  section.dataset.host = group.host;
+
+  const heatPct = Math.round(group.heat * 100);
+  const avgPct = Math.round(group.avgHeat * 100);
+  const dotOpacity = (0.3 + group.heat * 0.7).toFixed(2);
+  const heatRGB = heatColor(group.heat);
+  const count = group.rows.length;
+
+  const header = document.createElement("button");
+  header.type = "button";
+  header.className = "group-header";
+  header.setAttribute("aria-expanded", expanded ? "true" : "false");
+  header.innerHTML =
+    '<svg class="chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>' +
+    '<span class="group-host"></span>' +
+    `<span class="group-count">${count}</span>` +
+    `<span class="heat-badge" style="--dot-opacity:${dotOpacity};--heat-color:${heatRGB}" title="Rollup heat ${heatPct} (avg ${avgPct})">` +
+      '<span class="heat-dot"></span>' +
+      `<span>${heatPct}</span>` +
+    '</span>';
+  header.querySelector(".group-host").textContent = group.host;
+
+  const childList = document.createElement("ul");
+  childList.className = "group-children";
+  for (const row of group.rows) childList.appendChild(rowElement(row));
+
+  header.addEventListener("click", () => {
+    const open = section.classList.toggle("is-open");
+    header.setAttribute("aria-expanded", open ? "true" : "false");
+    // Persist per-host collapsed state best-effort.
+    try {
+      const key = "th:groupOpen:" + group.host;
+      chrome.storage?.local?.set?.({ [key]: open });
+    } catch {}
+  });
+
+  section.appendChild(header);
+  section.appendChild(childList);
+  parent.appendChild(section);
+}
+
 /** Top-level render. */
 async function render() {
   const [tabs, accessedResp, countsResp] = await Promise.all([
@@ -245,7 +325,29 @@ async function render() {
   list.classList.remove("hidden");
 
   const frag = document.createDocumentFragment();
-  for (const row of rows) frag.appendChild(rowElement(row));
+  if (GROUP_BY_HOST) {
+    list.classList.add("is-grouped");
+    const groups = groupRowsByHost(rows);
+    // Default: expand groups whose rollup heat ≥ HOT_THRESHOLD, collapse the rest.
+    // Per-host overrides come from chrome.storage.local ("th:groupOpen:<host>").
+    let overrides = {};
+    try {
+      const all = await new Promise((resolve) => {
+        chrome.storage?.local?.get?.(null, (items) => resolve(items || {}));
+      });
+      overrides = all || {};
+    } catch {}
+    for (const g of groups) {
+      const key = "th:groupOpen:" + g.host;
+      const expanded = key in overrides
+        ? !!overrides[key]
+        : (g.heat >= HOT_THRESHOLD || groups.length <= 4);
+      appendGroup(frag, g, expanded);
+    }
+  } else {
+    list.classList.remove("is-grouped");
+    for (const row of rows) frag.appendChild(rowElement(row));
+  }
   list.appendChild(frag);
 
   if (stat) {
@@ -352,10 +454,37 @@ async function wireCloseIdle() {
   });
 }
 
+/** Wire the "Group by host" toggle. Persists state in chrome.storage.local. */
+async function wireGroupToggle() {
+  const btn = document.getElementById("group-toggle-btn");
+  if (!btn) return;
+  // Hydrate persisted toggle state.
+  try {
+    const stored = await new Promise((resolve) => {
+      chrome.storage?.local?.get?.(["th:groupByHost"], (items) => resolve(items || {}));
+    });
+    GROUP_BY_HOST = !!stored["th:groupByHost"];
+  } catch {}
+  applyGroupToggleVisual(btn);
+  btn.addEventListener("click", () => {
+    GROUP_BY_HOST = !GROUP_BY_HOST;
+    applyGroupToggleVisual(btn);
+    try { chrome.storage?.local?.set?.({ "th:groupByHost": GROUP_BY_HOST }); } catch {}
+    render().catch((err) => console.warn(LOG, "re-render failed:", err));
+  });
+}
+
+function applyGroupToggleVisual(btn) {
+  btn.setAttribute("aria-pressed", GROUP_BY_HOST ? "true" : "false");
+  btn.classList.toggle("is-active", GROUP_BY_HOST);
+}
+
+let GROUP_BY_HOST = false;
+
 applyTheme();
 wireSettings();
 wireCloseIdle().catch((err) => console.warn(LOG, "wireCloseIdle failed:", err));
-render().catch((err) => console.warn(LOG, "render failed:", err));
+wireGroupToggle().then(() => render()).catch((err) => console.warn(LOG, "render failed:", err));
 
 // Expose for unit-style smoke tests in a non-extension runtime.
-export { buildRows, recencyScore, frequencyScore, heatColor };
+export { buildRows, recencyScore, frequencyScore, heatColor, groupRowsByHost };

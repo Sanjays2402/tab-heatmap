@@ -316,3 +316,101 @@ body {
   to { opacity: 1; transform: translateY(0); }
 }
 .tab-row { animation: row-in 240ms var(--ease) both; }
+
+/* --- Host grouping --- */
+.tab-list.is-grouped { gap: 8px; }
+
+.tab-group {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius);
+  background: var(--glass);
+  border: 1px solid var(--line);
+  overflow: hidden;
+  animation: row-in 240ms var(--ease) both;
+}
+.tab-group:hover { border-color: rgba(255,255,255,.14); }
+
+.group-header {
+  display: grid;
+  grid-template-columns: 14px 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  text-align: left;
+  transition: background 200ms var(--ease);
+}
+.group-header:hover { background: var(--glass-hi); }
+.group-header:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.group-header .chev {
+  color: var(--fg-faint);
+  transition: transform 200ms var(--ease);
+}
+.tab-group.is-open .group-header .chev { transform: rotate(90deg); }
+.group-host {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.group-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.08);
+  border: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+  font-size: 10.5px;
+  color: var(--fg-dim);
+}
+
+.group-children {
+  list-style: none;
+  margin: 0;
+  padding: 0 8px 8px 8px;
+  display: none;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+.tab-group.is-open .group-children { display: flex; }
+
+/* Children inside a group sit on the group's surface, not a duplicate panel. */
+.tab-group .tab-row {
+  background: transparent;
+  border-color: transparent;
+}
+.tab-group .tab-row:hover {
+  background: var(--glass-hi);
+  border-color: rgba(255,255,255,.12);
+}
+
+/* Group toggle button (ghost variant of .action-btn) */
+.action-btn--ghost {
+  background: var(--glass-hi);
+  border-color: var(--line);
+}
+.action-btn--ghost .action-icon { color: var(--fg-dim); }
+.action-btn--ghost.is-active {
+  background:
+    linear-gradient(135deg, color-mix(in oklab, var(--accent) 22%, transparent), transparent 60%),
+    var(--glass-hi);
+  border-color: color-mix(in oklab, var(--accent) 40%, var(--line));
+}
+.action-btn--ghost.is-active .action-icon { color: var(--accent); }
