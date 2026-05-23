@@ -10,10 +10,13 @@ const LOG_PREFIX = "[tab-heatmap]";
 const MSG = Object.freeze({
   PING: "th:ping",
   GET_LAST_ACCESSED: "th:getLastAccessed",
+  GET_ACTIVATION_COUNTS: "th:getActivationCounts",
 });
 
 /** Storage key namespace for per-tab last-accessed map. */
 const LAST_ACCESSED_KEY = "th:lastAccessed";
+/** Storage key namespace for per-tab activation-count map. */
+const ACTIVATION_COUNT_KEY = "th:activationCounts";
 
 /** Read the persisted last-accessed map. Returns {} if uninitialized. */
 async function readLastAccessed() {
@@ -39,14 +42,46 @@ async function stampTab(tabId, ts = Date.now()) {
   }
 }
 
-/** Drop a tab id from the map when it closes. */
+/** Read the persisted activation-count map. Returns {} if uninitialized. */
+async function readActivationCounts() {
+  try {
+    const out = await chrome.storage.session.get(ACTIVATION_COUNT_KEY);
+    const map = out?.[ACTIVATION_COUNT_KEY];
+    return (map && typeof map === "object") ? map : {};
+  } catch (err) {
+    console.warn(LOG_PREFIX, "readActivationCounts failed:", err);
+    return {};
+  }
+}
+
+/** Increment a tab's activation counter. */
+async function bumpActivation(tabId) {
+  if (typeof tabId !== "number" || tabId < 0) return;
+  try {
+    const map = await readActivationCounts();
+    const key = String(tabId);
+    map[key] = (typeof map[key] === "number" ? map[key] : 0) + 1;
+    await chrome.storage.session.set({ [ACTIVATION_COUNT_KEY]: map });
+  } catch (err) {
+    console.warn(LOG_PREFIX, "bumpActivation failed:", err);
+  }
+}
+
+/** Drop a tab id from the maps when it closes. */
 async function forgetTab(tabId) {
   try {
-    const map = await readLastAccessed();
-    if (String(tabId) in map) {
-      delete map[String(tabId)];
-      await chrome.storage.session.set({ [LAST_ACCESSED_KEY]: map });
-    }
+    const key = String(tabId);
+    const [accessed, counts] = await Promise.all([
+      readLastAccessed(),
+      readActivationCounts(),
+    ]);
+    let dirtyA = false, dirtyC = false;
+    if (key in accessed) { delete accessed[key]; dirtyA = true; }
+    if (key in counts) { delete counts[key]; dirtyC = true; }
+    const writes = {};
+    if (dirtyA) writes[LAST_ACCESSED_KEY] = accessed;
+    if (dirtyC) writes[ACTIVATION_COUNT_KEY] = counts;
+    if (dirtyA || dirtyC) await chrome.storage.session.set(writes);
   } catch (err) {
     console.warn(LOG_PREFIX, "forgetTab failed:", err);
   }
@@ -70,9 +105,12 @@ async function seedFromOpenTabs() {
   }
 }
 
-// Track activations as the canonical "accessed" signal.
+// Track activations as the canonical "accessed" signal and bump the counter.
 if (chrome?.tabs?.onActivated) {
-  chrome.tabs.onActivated.addListener(({ tabId }) => { stampTab(tabId); });
+  chrome.tabs.onActivated.addListener(({ tabId }) => {
+    stampTab(tabId);
+    bumpActivation(tabId);
+  });
 }
 // A tab finishing a navigation/load also counts as access.
 if (chrome?.tabs?.onUpdated) {
@@ -121,6 +159,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   if (msg.type === MSG.GET_LAST_ACCESSED) {
     readLastAccessed().then((map) => sendResponse({ ok: true, map }));
+    return true; // async response
+  }
+  if (msg.type === MSG.GET_ACTIVATION_COUNTS) {
+    readActivationCounts().then((map) => sendResponse({ ok: true, map }));
     return true; // async response
   }
   return false;
