@@ -3,7 +3,7 @@
 This file is the agent's task queue. Unchecked items get implemented in order. When all items are checked, the agent appends a new batch of 10.
 
 - [x] MV3 manifest + service worker scaffolding
-- [ ] Track tab last-accessed timestamp in chrome.storage.session
+- [x] Track tab last-accessed timestamp in chrome.storage.session
 - [ ] Track per-tab activation count
 - [ ] Popup UI: list all tabs with heat score (recency × frequency)
 - [ ] Color gradient: cold blue → warm amber → hot red
