@@ -574,3 +574,90 @@ body {
   color: var(--fg-faint);
   pointer-events: none;
 }
+
+/* ----- Hover tooltip: last-accessed time + activation count ----- */
+.heat-tooltip {
+  position: fixed;
+  left: -9999px;
+  top: -9999px;
+  z-index: 50;
+  min-width: 200px;
+  max-width: 280px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.06), transparent 60%),
+    var(--glass-hi);
+  box-shadow:
+    var(--glass-rim-strong),
+    0 12px 36px rgba(0, 0, 0, 0.32),
+    0 2px 6px rgba(0, 0, 0, 0.18);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  opacity: 0;
+  transform: translateY(-2px) scale(0.98);
+  pointer-events: none;
+  transition:
+    opacity 200ms var(--ease),
+    transform 220ms var(--ease);
+}
+.heat-tooltip.is-visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+.heat-tooltip .tt-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.heat-tooltip .tt-row + .tt-row { margin-top: 4px; }
+.heat-tooltip .tt-row--head {
+  margin-bottom: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+}
+.heat-tooltip .tt-row--sub { margin-top: 2px; padding-left: 20px; }
+.heat-tooltip .tt-spacer { width: 12px; }
+.heat-tooltip .tt-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 8px;
+  box-shadow: 0 0 0 2px rgba(255,255,255,0.06), 0 0 10px currentColor;
+}
+.heat-tooltip .tt-title {
+  font-weight: 600;
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.heat-tooltip .tt-icon { color: var(--fg-dim); flex: 0 0 12px; }
+.heat-tooltip .tt-label {
+  color: var(--fg-dim);
+  flex: 1 1 auto;
+  font-weight: 500;
+}
+.heat-tooltip .tt-value {
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.heat-tooltip .tt-value--dim {
+  color: var(--fg-faint);
+  font-weight: 400;
+  font-size: 11.5px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .heat-tooltip { transition: opacity 80ms linear; transform: none; }
+  .heat-tooltip.is-visible { transform: none; }
+}

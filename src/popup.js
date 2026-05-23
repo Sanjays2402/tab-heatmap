@@ -250,6 +250,138 @@ function fallbackFaviconSVG() {
   );
 }
 
+/**
+ * Format a millisecond timestamp as a compact relative string
+ *   ("just now", "5m ago", "3h ago", "2d ago"). Returns "never" for falsy stamps.
+ */
+function formatRelativeTime(stamp, now) {
+  if (!Number.isFinite(stamp) || stamp <= 0) return "never";
+  const ref = Number.isFinite(now) ? now : Date.now();
+  const diff = Math.max(0, ref - stamp);
+  const s = Math.floor(diff / 1000);
+  if (s < 10) return "just now";
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  if (d < 30) return `${d}d ago`;
+  const mo = Math.floor(d / 30);
+  if (mo < 12) return `${mo}mo ago`;
+  const y = Math.floor(d / 365);
+  return `${y}y ago`;
+}
+
+/** Format a millisecond timestamp as a locale string, or "" if invalid. */
+function formatAbsoluteTime(stamp) {
+  if (!Number.isFinite(stamp) || stamp <= 0) return "";
+  try { return new Date(stamp).toLocaleString(); } catch { return ""; }
+}
+
+/** Singleton hover tooltip; lazily created on first use. */
+let TOOLTIP_EL = null;
+let TOOLTIP_HIDE_TIMER = 0;
+function ensureTooltip() {
+  if (TOOLTIP_EL && document.body.contains(TOOLTIP_EL)) return TOOLTIP_EL;
+  const el = document.createElement("div");
+  el.className = "heat-tooltip";
+  el.setAttribute("role", "tooltip");
+  el.setAttribute("aria-hidden", "true");
+  el.innerHTML = (
+    '<div class="tt-row tt-row--head">' +
+      '<span class="tt-dot"></span>' +
+      '<span class="tt-title"></span>' +
+    '</div>' +
+    '<div class="tt-row">' +
+      '<svg class="tt-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>' +
+      '<span class="tt-label">Last active</span>' +
+      '<span class="tt-value" data-field="last-rel"></span>' +
+    '</div>' +
+    '<div class="tt-row tt-row--sub">' +
+      '<span class="tt-spacer"></span>' +
+      '<span class="tt-value tt-value--dim" data-field="last-abs"></span>' +
+    '</div>' +
+    '<div class="tt-row">' +
+      '<svg class="tt-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M5 12l4-4M5 12l4 4"/><path d="M19 6v12"/></svg>' +
+      '<span class="tt-label">Activations</span>' +
+      '<span class="tt-value" data-field="activations"></span>' +
+    '</div>'
+  );
+  document.body.appendChild(el);
+  TOOLTIP_EL = el;
+  return el;
+}
+
+function positionTooltip(tip, anchor) {
+  // Render off-screen first so we can measure, then place.
+  tip.style.left = "-9999px";
+  tip.style.top = "-9999px";
+  tip.classList.add("is-visible");
+  const margin = 8;
+  const a = anchor.getBoundingClientRect();
+  const t = tip.getBoundingClientRect();
+  const vw = document.documentElement.clientWidth;
+  const vh = document.documentElement.clientHeight;
+  let left = a.left + (a.width - t.width) / 2;
+  left = Math.max(margin, Math.min(left, vw - t.width - margin));
+  let top = a.bottom + margin;
+  if (top + t.height > vh - margin) {
+    top = Math.max(margin, a.top - t.height - margin);
+  }
+  tip.style.left = `${Math.round(left)}px`;
+  tip.style.top = `${Math.round(top)}px`;
+}
+
+function showTooltipFor(anchor, row) {
+  const tip = ensureTooltip();
+  if (TOOLTIP_HIDE_TIMER) { clearTimeout(TOOLTIP_HIDE_TIMER); TOOLTIP_HIDE_TIMER = 0; }
+  const dot = tip.querySelector(".tt-dot");
+  if (dot) dot.style.background = heatColor(row.heat);
+  const titleEl = tip.querySelector(".tt-title");
+  if (titleEl) titleEl.textContent = row.title || row.url || "Untitled";
+  const relEl = tip.querySelector('[data-field="last-rel"]');
+  const absEl = tip.querySelector('[data-field="last-abs"]');
+  const actEl = tip.querySelector('[data-field="activations"]');
+  if (relEl) relEl.textContent = formatRelativeTime(row.lastAccessed, Date.now());
+  if (absEl) absEl.textContent = formatAbsoluteTime(row.lastAccessed) || "unknown";
+  if (actEl) {
+    const n = Number.isFinite(row.activations) ? row.activations : 0;
+    actEl.textContent = `${n}\u00A0\u00D7`;
+  }
+  tip.setAttribute("aria-hidden", "false");
+  positionTooltip(tip, anchor);
+}
+
+function hideTooltip(immediate) {
+  if (!TOOLTIP_EL) return;
+  if (TOOLTIP_HIDE_TIMER) { clearTimeout(TOOLTIP_HIDE_TIMER); TOOLTIP_HIDE_TIMER = 0; }
+  const apply = () => {
+    if (!TOOLTIP_EL) return;
+    TOOLTIP_EL.classList.remove("is-visible");
+    TOOLTIP_EL.setAttribute("aria-hidden", "true");
+  };
+  if (immediate) apply();
+  else TOOLTIP_HIDE_TIMER = setTimeout(apply, 80);
+}
+
+/** Attach hover/focus tooltip listeners to a tab row element. */
+function wireRowTooltip(li, row) {
+  let showTimer = 0;
+  const onEnter = () => {
+    if (showTimer) clearTimeout(showTimer);
+    showTimer = setTimeout(() => showTooltipFor(li, row), 140);
+  };
+  const onLeave = () => {
+    if (showTimer) { clearTimeout(showTimer); showTimer = 0; }
+    hideTooltip(false);
+  };
+  li.addEventListener("mouseenter", onEnter);
+  li.addEventListener("mouseleave", onLeave);
+  li.addEventListener("focus", () => showTooltipFor(li, row));
+  li.addEventListener("blur", () => hideTooltip(true));
+}
+
 /** Create a single tab row element. */
 function rowElement(row) {
   const li = document.createElement("li");
@@ -257,7 +389,9 @@ function rowElement(row) {
   li.setAttribute("role", "button");
   li.setAttribute("tabindex", "0");
   li.dataset.tabId = String(row.id);
-  li.title = row.title + (row.url ? "\n" + row.url : "");
+  // Native title is suppressed in favor of the custom hover tooltip; keep
+  // a screen-reader label so the row still announces context.
+  li.setAttribute("aria-label", row.title + (row.url ? " — " + row.url : ""));
 
   // Favicon cell
   let faviconHTML;
@@ -299,6 +433,7 @@ function rowElement(row) {
   li.addEventListener("keydown", (ev) => {
     if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); activate(); }
   });
+  wireRowTooltip(li, row);
 
   return li;
 }
@@ -969,4 +1104,4 @@ Promise.all([wireSort(), wireGroupToggle()])
   .catch((err) => console.warn(LOG, "render failed:", err));
 
 // Expose for unit-style smoke tests in a non-extension runtime.
-export { buildRows, recencyScore, frequencyScore, heatColor, groupRowsByHost, buildSnapshot, parseSnapshot, rowMatchesFilter, normalizeQuery, sortRows, sortGroups };
+export { buildRows, recencyScore, frequencyScore, heatColor, groupRowsByHost, buildSnapshot, parseSnapshot, rowMatchesFilter, normalizeQuery, sortRows, sortGroups, formatRelativeTime, formatAbsoluteTime };
