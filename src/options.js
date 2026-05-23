@@ -13,7 +13,10 @@ const DEFAULTS = Object.freeze({
   hotThreshold: 0.5,
   recencyHalfLifeMinutes: 30,
   domainHalfLifeMinutes: {},
+  theme: "auto",
 });
+
+const VALID_THEMES = new Set(["auto", "light", "dark"]);
 
 const LIMITS = Object.freeze({
   idleCloseDays: { min: 1, max: 365 },
@@ -118,6 +121,74 @@ function isValidHost(h) {
 /** In-memory edit copy of the per-domain map; persisted on save. */
 let domainMap = {};
 
+/** Current theme preference in the form ("auto"|"light"|"dark"). */
+let themePref = "auto";
+let THEME_MEDIA = null;
+let THEME_LISTENER = null;
+
+/** Apply the chosen theme to <body> and bind a media listener for auto. */
+function applyTheme(pref) {
+  const p = VALID_THEMES.has(pref) ? pref : "auto";
+  if (THEME_MEDIA && THEME_LISTENER) {
+    try { THEME_MEDIA.removeEventListener("change", THEME_LISTENER); } catch { /* noop */ }
+    THEME_LISTENER = null;
+  }
+  try {
+    if (p === "auto") {
+      // Let the @media (prefers-color-scheme) rule drive things by clearing the attr.
+      // We still observe changes so other auto-tied UI (e.g. ambient blobs) can respond.
+      delete document.body.dataset.theme;
+      THEME_MEDIA = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)");
+      if (THEME_MEDIA && typeof THEME_MEDIA.addEventListener === "function") {
+        THEME_LISTENER = () => { /* attribute already absent; CSS handles it */ };
+        THEME_MEDIA.addEventListener("change", THEME_LISTENER);
+      }
+    } else {
+      document.body.dataset.theme = p;
+    }
+  } catch {
+    document.body.dataset.theme = p === "light" ? "light" : "dark";
+  }
+}
+
+function renderThemeSeg() {
+  const seg = document.getElementById("theme-seg");
+  if (!seg) return;
+  for (const btn of seg.querySelectorAll(".seg-btn")) {
+    const on = btn.dataset.theme === themePref;
+    btn.setAttribute("aria-checked", on ? "true" : "false");
+  }
+}
+
+function wireThemeSeg() {
+  const seg = document.getElementById("theme-seg");
+  if (!seg) return;
+  seg.addEventListener("click", (ev) => {
+    const btn = ev.target instanceof Element ? ev.target.closest(".seg-btn") : null;
+    if (!btn) return;
+    const next = btn.dataset.theme;
+    if (!VALID_THEMES.has(next) || next === themePref) return;
+    themePref = next;
+    applyTheme(themePref);
+    renderThemeSeg();
+    markDirty();
+  });
+  seg.addEventListener("keydown", (ev) => {
+    if (ev.key !== "ArrowLeft" && ev.key !== "ArrowRight") return;
+    const order = ["auto", "light", "dark"];
+    const i = order.indexOf(themePref);
+    if (i < 0) return;
+    ev.preventDefault();
+    const ni = ev.key === "ArrowLeft" ? (i + order.length - 1) % order.length : (i + 1) % order.length;
+    themePref = order[ni];
+    applyTheme(themePref);
+    renderThemeSeg();
+    const focusBtn = seg.querySelector(`.seg-btn[data-theme="${themePref}"]`);
+    if (focusBtn) focusBtn.focus();
+    markDirty();
+  });
+}
+
 function renderDomainList() {
   const list = document.getElementById("domain-list");
   if (!list) return;
@@ -189,6 +260,7 @@ function readForm() {
     hotThreshold: hot.get() / 100,
     recencyHalfLifeMinutes: half.get(),
     domainHalfLifeMinutes: { ...domainMap },
+    theme: VALID_THEMES.has(themePref) ? themePref : "auto",
   };
 }
 
@@ -199,6 +271,9 @@ function writeForm(s) {
   domainMap = (s.domainHalfLifeMinutes && typeof s.domainHalfLifeMinutes === "object")
     ? { ...s.domainHalfLifeMinutes }
     : {};
+  themePref = VALID_THEMES.has(s.theme) ? s.theme : "auto";
+  applyTheme(themePref);
+  renderThemeSeg();
   renderDomainList();
 }
 
@@ -209,6 +284,7 @@ function markDirty() {
     cur.idleCloseDays !== initial.idleCloseDays ||
     cur.hotThreshold !== initial.hotThreshold ||
     cur.recencyHalfLifeMinutes !== initial.recencyHalfLifeMinutes ||
+    cur.theme !== (initial.theme || "auto") ||
     !sameDomain;
   setStatus(changed ? "Unsaved changes" : "", changed ? "warn" : "");
 }
@@ -221,6 +297,7 @@ async function load() {
     hotThreshold: clamp(s.hotThreshold, 0.05, 0.95, DEFAULTS.hotThreshold),
     recencyHalfLifeMinutes: clamp(s.recencyHalfLifeMinutes, LIMITS.recencyHalfLifeMinutes.min, LIMITS.recencyHalfLifeMinutes.max, DEFAULTS.recencyHalfLifeMinutes),
     domainHalfLifeMinutes: (s.domainHalfLifeMinutes && typeof s.domainHalfLifeMinutes === "object") ? { ...s.domainHalfLifeMinutes } : {},
+    theme: VALID_THEMES.has(s.theme) ? s.theme : DEFAULTS.theme,
   };
   writeForm(initial);
   setStatus("", "");
@@ -238,6 +315,7 @@ async function save() {
       hotThreshold: resp.settings.hotThreshold,
       recencyHalfLifeMinutes: resp.settings.recencyHalfLifeMinutes,
       domainHalfLifeMinutes: { ...(resp.settings.domainHalfLifeMinutes || {}) },
+      theme: VALID_THEMES.has(resp.settings.theme) ? resp.settings.theme : DEFAULTS.theme,
     };
     writeForm(initial);
     setStatus("Saved", "ok");
@@ -255,8 +333,9 @@ function resetDefaults() {
 els.save?.addEventListener("click", () => { save().catch((err) => { console.warn(LOG, err); setStatus("Save failed", "warn"); }); });
 els.reset?.addEventListener("click", resetDefaults);
 wireDomainAdd();
+wireThemeSeg();
 
 load().catch((err) => { console.warn(LOG, "load failed:", err); setStatus("Failed to load settings", "warn"); });
 
 // Exposed for smoke testing in non-extension runtimes.
-export { clamp, readForm, writeForm, DEFAULTS, LIMITS, normalizeHost, isValidHost };
+export { clamp, readForm, writeForm, DEFAULTS, LIMITS, normalizeHost, isValidHost, VALID_THEMES };

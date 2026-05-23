@@ -16,4 +16,4 @@ This file is the agent's task queue. Unchecked items get implemented in order. W
 - [x] Pinned tabs always excluded from cold-close
 - [x] Per-domain heat decay rate
 - [x] Liquid-glass popup UI (frosted, Phosphor icons)
-- [ ] Dark/light theme with auto detection
+- [x] Dark/light theme with auto detection

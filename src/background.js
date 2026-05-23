@@ -27,7 +27,11 @@ const DEFAULT_SETTINGS = Object.freeze({
   // Per-domain override map: { "github.com": 240, "news.ycombinator.com": 5 }
   // Each entry overrides recencyHalfLifeMinutes for tabs on that host.
   domainHalfLifeMinutes: {},
+  // UI theme: "auto" follows OS prefers-color-scheme; "light"/"dark" force.
+  theme: "auto",
 });
+
+const VALID_THEMES = new Set(["auto", "light", "dark"]);
 
 /** Lowercase + strip leading www. so user input "WWW.GitHub.com" matches "github.com". */
 function normalizeHost(h) {
@@ -63,6 +67,7 @@ async function readSettings() {
     const r = Number(merged.recencyHalfLifeMinutes);
     merged.recencyHalfLifeMinutes = Number.isFinite(r) && r >= 1 ? Math.min(1440, Math.max(1, r)) : DEFAULT_SETTINGS.recencyHalfLifeMinutes;
     merged.domainHalfLifeMinutes = sanitizeDomainMap(merged.domainHalfLifeMinutes);
+    merged.theme = VALID_THEMES.has(merged.theme) ? merged.theme : DEFAULT_SETTINGS.theme;
     return merged;
   } catch (err) {
     console.warn(LOG_PREFIX, "readSettings failed:", err);

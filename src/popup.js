@@ -44,11 +44,34 @@ function halfLifeForUrl(url) {
   return RECENCY_HALF_LIFE_MS;
 }
 
-/** Detect prefers-color-scheme and set body theme accordingly. */
-function applyTheme() {
+/** Detect prefers-color-scheme and set body theme accordingly.
+ * If `preference` is 'light' or 'dark', force it. Otherwise auto-follow OS
+ * and subscribe to changes for the lifetime of the popup.
+ */
+let THEME_MEDIA = null;
+let THEME_LISTENER = null;
+function applyTheme(preference) {
+  const pref = preference === "light" || preference === "dark" ? preference : "auto";
+  // Clear any prior auto-mode listener so we don't double-bind.
+  if (THEME_MEDIA && THEME_LISTENER) {
+    try { THEME_MEDIA.removeEventListener("change", THEME_LISTENER); } catch { /* noop */ }
+    THEME_LISTENER = null;
+  }
   try {
-    const dark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
-    document.body.dataset.theme = dark ? "dark" : "light";
+    if (pref === "auto") {
+      THEME_MEDIA = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)");
+      const setFromMedia = () => {
+        const dark = !!(THEME_MEDIA && THEME_MEDIA.matches);
+        document.body.dataset.theme = dark ? "dark" : "light";
+      };
+      setFromMedia();
+      if (THEME_MEDIA && typeof THEME_MEDIA.addEventListener === "function") {
+        THEME_LISTENER = setFromMedia;
+        THEME_MEDIA.addEventListener("change", THEME_LISTENER);
+      }
+    } else {
+      document.body.dataset.theme = pref;
+    }
   } catch {
     document.body.dataset.theme = "dark";
   }
@@ -334,6 +357,7 @@ async function render() {
   DOMAIN_HALF_LIFE = (settings.domainHalfLifeMinutes && typeof settings.domainHalfLifeMinutes === "object")
     ? settings.domainHalfLifeMinutes
     : {};
+  applyTheme(settings.theme);
 
   const rows = buildRows(tabs, accessedResp.map || {}, countsResp.map || {});
   const list = document.getElementById("tab-list");
