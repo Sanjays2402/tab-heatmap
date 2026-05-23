@@ -5,6 +5,7 @@ const LOG = "[tab-heatmap:popup]";
 
 const MSG = Object.freeze({
   GET_LAST_ACCESSED: "th:getLastAccessed",
+  JUMP_HOTTEST: "th:jumpHottest",
   GET_ACTIVATION_COUNTS: "th:getActivationCounts",
   CLOSE_IDLE: "th:closeIdle",
   GET_SETTINGS: "th:getSettings",
@@ -682,6 +683,25 @@ async function wireImport() {
   });
 }
 
+/** Wire the "Hottest" button: asks the SW to focus the hottest tab. */
+function wireJumpHottest() {
+  const btn = document.getElementById("jump-hottest-btn");
+  const status = document.getElementById("toolbar-status");
+  if (!btn) return;
+  btn.addEventListener("click", async (ev) => {
+    ev.preventDefault();
+    btn.setAttribute("disabled", "true");
+    const res = await sendMessage(MSG.JUMP_HOTTEST);
+    btn.removeAttribute("disabled");
+    if (res?.ok) {
+      window.close();
+    } else if (status) {
+      status.textContent = "No hotter tab to jump to";
+      status.classList.remove("is-warn");
+    }
+  });
+}
+
 function applyGroupToggleVisual(btn) {
   btn.setAttribute("aria-pressed", GROUP_BY_HOST ? "true" : "false");
   btn.classList.toggle("is-active", GROUP_BY_HOST);
@@ -694,6 +714,7 @@ wireSettings();
 wireCloseIdle().catch((err) => console.warn(LOG, "wireCloseIdle failed:", err));
 wireExport().catch((err) => console.warn(LOG, "wireExport failed:", err));
 wireImport().catch((err) => console.warn(LOG, "wireImport failed:", err));
+wireJumpHottest();
 wireGroupToggle().then(() => render()).catch((err) => console.warn(LOG, "render failed:", err));
 
 // Expose for unit-style smoke tests in a non-extension runtime.

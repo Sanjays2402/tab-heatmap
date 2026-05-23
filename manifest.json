@@ -27,6 +27,15 @@
     "page": "src/options.html",
     "open_in_tab": true
   },
+  "commands": {
+    "jump-to-hottest": {
+      "suggested_key": {
+        "default": "Alt+Shift+H",
+        "mac": "Alt+Shift+H"
+      },
+      "description": "Jump to the hottest tab"
+    }
+  },
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",

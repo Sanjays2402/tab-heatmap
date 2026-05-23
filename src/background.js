@@ -9,6 +9,7 @@ const LOG_PREFIX = "[tab-heatmap]";
 /** Stable internal message protocol between popup/options and the SW. */
 const MSG = Object.freeze({
   PING: "th:ping",
+  JUMP_HOTTEST: "th:jumpHottest",
   GET_LAST_ACCESSED: "th:getLastAccessed",
   GET_ACTIVATION_COUNTS: "th:getActivationCounts",
   CLOSE_IDLE: "th:closeIdle",
@@ -186,6 +187,66 @@ async function forgetTab(tabId) {
   }
 }
 
+/**
+ * Compute heat score for a tab using same model as the popup:
+ *   heat = 0.6 * recency + 0.4 * frequency
+ * recency = 0.5 ^ (ageMs / halfLifeMs); frequency = count / max(count).
+ */
+function computeHeat(tab, accessedMap, countsMap, maxCount, halfLifeMs, now) {
+  const key = String(tab?.id);
+  const stamp = effectiveStamp(tab, accessedMap);
+  const age = Math.max(0, now - stamp);
+  const r = stamp > 0 ? Math.pow(0.5, age / halfLifeMs) : 0;
+  const c = typeof countsMap?.[key] === "number" ? countsMap[key] : 0;
+  const f = maxCount > 0 ? Math.min(1, c / maxCount) : 0;
+  return 0.6 * r + 0.4 * f;
+}
+
+/**
+ * Find the hottest tab across all windows and focus it.
+ * Excludes the currently-active tab in the focused window so the shortcut
+ * always *moves* the user. Returns a summary.
+ */
+async function jumpToHottestTab() {
+  if (!chrome?.tabs?.query) return { ok: false, error: "tabs_api_unavailable" };
+  const settings = await readSettings();
+  const halfLifeMs = Math.max(1, settings.recencyHalfLifeMinutes) * 60 * 1000;
+  const [tabs, accessed, counts, currentWin] = await Promise.all([
+    chrome.tabs.query({}),
+    readLastAccessed(),
+    readActivationCounts(),
+    chrome.windows?.getLastFocused ? chrome.windows.getLastFocused({ populate: false }).catch(() => null) : Promise.resolve(null),
+  ]);
+  if (!tabs || tabs.length === 0) return { ok: false, error: "no_tabs" };
+  const maxCount = Object.values(counts || {}).reduce((m, v) => (typeof v === "number" && v > m ? v : m), 0);
+  const now = Date.now();
+  const currentWinId = currentWin?.id;
+  // Identify the focused window's active tab; we want to skip it so the
+  // shortcut is a no-op-avoidance when the user is *on* the hottest tab.
+  let activeInCurrent = null;
+  for (const t of tabs) {
+    if (t.windowId === currentWinId && t.active) { activeInCurrent = t.id; break; }
+  }
+  let best = null;
+  let bestHeat = -1;
+  for (const t of tabs) {
+    if (!t || typeof t.id !== "number") continue;
+    if (t.id === activeInCurrent) continue;
+    const h = computeHeat(t, accessed, counts, maxCount, halfLifeMs, now);
+    if (h > bestHeat) { bestHeat = h; best = t; }
+  }
+  if (!best) return { ok: false, error: "no_candidate" };
+  try {
+    await chrome.tabs.update(best.id, { active: true });
+    if (chrome.windows?.update && typeof best.windowId === "number") {
+      await chrome.windows.update(best.windowId, { focused: true });
+    }
+    return { ok: true, tabId: best.id, windowId: best.windowId, heat: bestHeat };
+  } catch (err) {
+    return { ok: false, error: String(err?.message || err) };
+  }
+}
+
 /** Seed the map with every currently-open tab on boot/install. */
 async function seedFromOpenTabs() {
   try {
@@ -250,6 +311,16 @@ chrome.runtime.onStartup.addListener(async () => {
   await seedFromOpenTabs();
 });
 
+// Keyboard shortcut: jump-to-hottest.
+if (chrome?.commands?.onCommand) {
+  chrome.commands.onCommand.addListener(async (command) => {
+    if (command === "jump-to-hottest") {
+      const res = await jumpToHottestTab();
+      if (!res.ok) console.warn(LOG_PREFIX, "jump-to-hottest:", res.error);
+    }
+  });
+}
+
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (!msg || typeof msg !== "object") return false;
   if (msg.type === MSG.PING) {
@@ -301,6 +372,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         sendResponse({ ok: false, error: String(err?.message || err) });
       }
     })();
+    return true;
+  }
+  if (msg.type === MSG.JUMP_HOTTEST) {
+    jumpToHottestTab().then(sendResponse);
     return true;
   }
   if (msg.type === MSG.CLOSE_IDLE) {

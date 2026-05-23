@@ -14,3 +14,23 @@ if (!m.options_ui || m.options_ui.page !== "src/options.html") {
   process.exit(1);
 }
 
+// Keyboard shortcut: jump-to-hottest must be declared and wired in the SW.
+if (!m.commands || !m.commands["jump-to-hottest"]) {
+  console.error("manifest.commands['jump-to-hottest'] missing");
+  process.exit(1);
+}
+const sk = m.commands["jump-to-hottest"].suggested_key;
+if (!sk || !sk.default) {
+  console.error("jump-to-hottest must define suggested_key.default");
+  process.exit(1);
+}
+const bg = fs.readFileSync("src/background.js", "utf8");
+if (!/chrome\.commands\.onCommand/.test(bg) || !/jump-to-hottest/.test(bg)) {
+  console.error("background.js must handle the jump-to-hottest command");
+  process.exit(1);
+}
+if (!/jumpToHottestTab/.test(bg)) {
+  console.error("background.js must define jumpToHottestTab");
+  process.exit(1);
+}
+
