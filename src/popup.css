@@ -105,6 +105,57 @@ body {
 .brand-icon { color: var(--accent); }
 .title { font-weight: 600; font-size: 14px; }
 
+.window-scoreboard {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 10px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--glass);
+  border: 1px solid var(--line);
+  box-shadow: var(--glass-rim);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  font-size: 11px;
+  color: var(--fg-dim);
+  letter-spacing: -0.01em;
+  transition: opacity 200ms var(--ease), transform 200ms var(--ease);
+}
+.window-scoreboard.hidden { display: none; }
+.window-scoreboard .ws-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  line-height: 1;
+}
+.window-scoreboard .ws-stat.hidden { display: none; }
+.window-scoreboard .ws-stat + .ws-stat {
+  padding-left: 8px;
+  border-left: 1px solid var(--line);
+}
+.window-scoreboard .ws-stat svg { opacity: 0.85; }
+.window-scoreboard .ws-tabs { color: var(--fg); font-weight: 600; }
+.window-scoreboard .ws-hot { color: var(--accent); font-weight: 600; }
+.ws-bar {
+  display: inline-block;
+  width: 36px;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.08);
+  overflow: hidden;
+  position: relative;
+}
+body[data-theme="light"] .ws-bar { background: rgba(0,0,0,0.08); }
+.ws-bar-fill {
+  display: block;
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #3da3ff, #f5c451 55%, #ff5a4a);
+  transition: width 220ms var(--ease);
+}
+
 .icon-btn {
   display: inline-flex;
   align-items: center;

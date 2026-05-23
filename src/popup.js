@@ -992,10 +992,71 @@ async function render() {
   // Refresh quick-action chip counts from the full row set.
   LAST_ROWS = allRows;
   refreshQuickChipCounts(allRows);
+  // Per-window scoreboard reflects only the focused popup window.
+  renderWindowScoreboard(allRows);
 }
 
 /** Most recent allRows from render(); used by chip handlers. */
 let LAST_ROWS = [];
+
+/** Cached id of the window the popup belongs to. Resolved once on init. */
+let CURRENT_WINDOW_ID = null;
+async function resolveCurrentWindowId() {
+  if (Number.isFinite(CURRENT_WINDOW_ID)) return CURRENT_WINDOW_ID;
+  try {
+    const w = await chrome.windows.getCurrent({ populate: false });
+    if (w && Number.isFinite(w.id)) CURRENT_WINDOW_ID = w.id;
+  } catch (err) {
+    console.warn(LOG, "windows.getCurrent failed:", err);
+  }
+  return CURRENT_WINDOW_ID;
+}
+
+/**
+ * Render the per-window heat scoreboard in the topbar.
+ * Counts tabs, hot tabs (heat >= HOT_THRESHOLD), and the average heat of the
+ * window the popup is anchored to. Hidden when no tabs exist in this window.
+ */
+function renderWindowScoreboard(allRows) {
+  const board = document.getElementById("window-scoreboard");
+  if (!board) return;
+  const wid = CURRENT_WINDOW_ID;
+  const here = (allRows || []).filter((r) => Number.isFinite(wid) ? r.windowId === wid : true);
+  if (!here.length) {
+    board.classList.add("hidden");
+    return;
+  }
+  board.classList.remove("hidden");
+  const hot = here.filter((r) => r.heat >= HOT_THRESHOLD).length;
+  const avg = here.reduce((s, r) => s + (Number.isFinite(r.heat) ? r.heat : 0), 0) / here.length;
+  const tabsEl = document.getElementById("ws-tabs-count");
+  const hotEl = document.getElementById("ws-hot-count");
+  const avgEl = document.getElementById("ws-avg-pct");
+  const fillEl = document.getElementById("ws-bar-fill");
+  const winsWrap = document.getElementById("ws-windows");
+  const winsEl = document.getElementById("ws-windows-count");
+  if (tabsEl) tabsEl.textContent = String(here.length);
+  if (hotEl) hotEl.textContent = String(hot);
+  const pct = Math.round(Math.max(0, Math.min(1, avg)) * 100);
+  if (avgEl) avgEl.textContent = `${pct}%`;
+  if (fillEl) fillEl.style.width = `${pct}%`;
+  // "This is window N of M" indicator when multiple windows are open.
+  const otherWindowIds = new Set();
+  for (const r of allRows || []) {
+    if (Number.isFinite(r.windowId)) otherWindowIds.add(r.windowId);
+  }
+  const windowCount = otherWindowIds.size;
+  if (windowCount > 1 && winsWrap && winsEl) {
+    winsEl.textContent = String(windowCount);
+    winsWrap.classList.remove("hidden");
+    winsWrap.title = `${windowCount} windows open • this is the focused one`;
+  } else if (winsWrap) {
+    winsWrap.classList.add("hidden");
+  }
+  const hotLabel = hot === 1 ? "hot tab" : "hot tabs";
+  const tabLabel = here.length === 1 ? "tab" : "tabs";
+  board.title = `This window: ${here.length} ${tabLabel}, ${hot} ${hotLabel}, avg heat ${pct}%`;
+}
 /** Last-known idleCloseDays threshold, hydrated by wireQuickChips() on init. */
 let IDLE_DAYS = 7;
 
@@ -1883,7 +1944,7 @@ wireQuickChips().catch((err) => console.warn(LOG, "wireQuickChips failed:", err)
 wireJumpHottest();
 wireSearch();
 wireBulkSelect();
-Promise.all([wireSort(), wireGroupToggle()])
+Promise.all([wireSort(), wireGroupToggle(), resolveCurrentWindowId()])
   .then(() => render())
   .catch((err) => console.warn(LOG, "render failed:", err));
 
