@@ -16,6 +16,8 @@ const DEFAULTS = Object.freeze({
   domainHalfLifeMinutes: {},
   coldWhitelist: [],
   theme: "auto",
+  dailySummaryEnabled: true,
+  dailySummaryHour: 9,
 });
 
 const VALID_THEMES = new Set(["auto", "light", "dark"]);
@@ -331,6 +333,8 @@ function wireDomainAdd() {
 }
 
 function readForm() {
+  const dailyEl = document.getElementById("daily-enabled");
+  const hourEl = document.getElementById("daily-hour");
   return {
     idleCloseDays: idle.get(),
     hotThreshold: hot.get() / 100,
@@ -338,6 +342,8 @@ function readForm() {
     domainHalfLifeMinutes: { ...domainMap },
     coldWhitelist: sanitizeWhitelist(whitelist),
     theme: VALID_THEMES.has(themePref) ? themePref : "auto",
+    dailySummaryEnabled: dailyEl ? !!dailyEl.checked : DEFAULTS.dailySummaryEnabled,
+    dailySummaryHour: clamp(hourEl?.value, 0, 23, DEFAULTS.dailySummaryHour),
   };
 }
 
@@ -350,6 +356,10 @@ function writeForm(s) {
     : {};
   whitelist = sanitizeWhitelist(s.coldWhitelist);
   themePref = VALID_THEMES.has(s.theme) ? s.theme : "auto";
+  const dailyEl = document.getElementById("daily-enabled");
+  const hourEl = document.getElementById("daily-hour");
+  if (dailyEl) dailyEl.checked = s.dailySummaryEnabled !== false;
+  if (hourEl) hourEl.value = String(clamp(s.dailySummaryHour, 0, 23, DEFAULTS.dailySummaryHour));
   applyTheme(themePref);
   renderThemeSeg();
   renderDomainList();
@@ -365,6 +375,8 @@ function markDirty() {
     cur.hotThreshold !== initial.hotThreshold ||
     cur.recencyHalfLifeMinutes !== initial.recencyHalfLifeMinutes ||
     cur.theme !== (initial.theme || "auto") ||
+    cur.dailySummaryEnabled !== (initial.dailySummaryEnabled !== false) ||
+    cur.dailySummaryHour !== (initial.dailySummaryHour ?? DEFAULTS.dailySummaryHour) ||
     !sameDomain ||
     !sameWhitelist;
   setStatus(changed ? "Unsaved changes" : "", changed ? "warn" : "");
@@ -380,6 +392,8 @@ async function load() {
     domainHalfLifeMinutes: (s.domainHalfLifeMinutes && typeof s.domainHalfLifeMinutes === "object") ? { ...s.domainHalfLifeMinutes } : {},
     coldWhitelist: sanitizeWhitelist(s.coldWhitelist),
     theme: VALID_THEMES.has(s.theme) ? s.theme : DEFAULTS.theme,
+    dailySummaryEnabled: s.dailySummaryEnabled !== false,
+    dailySummaryHour: clamp(s.dailySummaryHour, 0, 23, DEFAULTS.dailySummaryHour),
   };
   writeForm(initial);
   setStatus("", "");
@@ -399,6 +413,8 @@ async function save() {
       domainHalfLifeMinutes: { ...(resp.settings.domainHalfLifeMinutes || {}) },
       coldWhitelist: sanitizeWhitelist(resp.settings.coldWhitelist),
       theme: VALID_THEMES.has(resp.settings.theme) ? resp.settings.theme : DEFAULTS.theme,
+      dailySummaryEnabled: resp.settings.dailySummaryEnabled !== false,
+      dailySummaryHour: clamp(resp.settings.dailySummaryHour, 0, 23, DEFAULTS.dailySummaryHour),
     };
     writeForm(initial);
     setStatus("Saved", "ok");
@@ -471,6 +487,14 @@ wireDomainAdd();
 wireWhitelistAdd();
 wireThemeSeg();
 wireResetHeatData();
+document.getElementById("daily-enabled")?.addEventListener("change", markDirty);
+document.getElementById("daily-hour")?.addEventListener("input", markDirty);
+document.getElementById("daily-hour")?.addEventListener("blur", (ev) => {
+  const el = ev.target;
+  if (!(el instanceof HTMLInputElement)) return;
+  el.value = String(clamp(el.value, 0, 23, DEFAULTS.dailySummaryHour));
+  markDirty();
+});
 
 load().catch((err) => { console.warn(LOG, "load failed:", err); setStatus("Failed to load settings", "warn"); });
 

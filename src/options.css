@@ -439,3 +439,60 @@ input[type="range"]::-moz-range-thumb {
   from { opacity: 0; transform: translateY(-4px); }
   to   { opacity: 1; transform: translateY(0); }
 }
+
+/* Daily summary toggle row */
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  user-select: none;
+  padding: 4px 0 12px 0;
+}
+.toggle-label {
+  font-size: 14px;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+}
+.toggle-input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+.toggle-switch {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--glass-hi);
+  border: 1px solid var(--line);
+  transition: background 180ms var(--ease), border-color 180ms var(--ease);
+  flex: 0 0 auto;
+}
+.toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--fg);
+  opacity: 0.7;
+  transition: transform 200ms var(--ease), background 180ms var(--ease), opacity 180ms var(--ease);
+}
+.toggle-input:checked + .toggle-switch {
+  background: var(--accent-soft);
+  border-color: color-mix(in oklab, var(--accent) 60%, var(--line));
+}
+.toggle-input:checked + .toggle-switch .toggle-thumb {
+  transform: translateX(18px);
+  background: var(--accent);
+  opacity: 1;
+}
+.toggle-input:focus-visible + .toggle-switch {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}

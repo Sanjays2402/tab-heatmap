@@ -37,6 +37,10 @@ const DEFAULT_SETTINGS = Object.freeze({
   coldWhitelist: [],
   // UI theme: "auto" follows OS prefers-color-scheme; "light"/"dark" force.
   theme: "auto",
+  // Daily summary notification: post "X cold tabs ready to close" once per day.
+  dailySummaryEnabled: true,
+  // Local hour-of-day (0..23) at which the daily summary fires.
+  dailySummaryHour: 9,
 });
 
 const VALID_THEMES = new Set(["auto", "light", "dark"]);
@@ -90,6 +94,9 @@ async function readSettings() {
     merged.domainHalfLifeMinutes = sanitizeDomainMap(merged.domainHalfLifeMinutes);
     merged.coldWhitelist = sanitizeHostList(merged.coldWhitelist);
     merged.theme = VALID_THEMES.has(merged.theme) ? merged.theme : DEFAULT_SETTINGS.theme;
+    merged.dailySummaryEnabled = merged.dailySummaryEnabled !== false;
+    const dh = Number(merged.dailySummaryHour);
+    merged.dailySummaryHour = Number.isFinite(dh) ? Math.min(23, Math.max(0, Math.round(dh))) : DEFAULT_SETTINGS.dailySummaryHour;
     return merged;
   } catch (err) {
     console.warn(LOG_PREFIX, "readSettings failed:", err);
@@ -945,3 +952,144 @@ chrome.runtime.onStartup.addListener(() => { ensureContextMenus(); });
 ensureContextMenus();
 
 console.log(LOG_PREFIX, "service worker booted");
+
+/**
+ * Daily summary notification — posts a single "X cold tabs ready to close"
+ * banner once per day. Uses chrome.alarms scheduled to the user's preferred
+ * local hour-of-day. Persists last-fired stamp under DAILY_SUMMARY_KEY so a
+ * mid-day SW restart can't double-fire.
+ */
+const DAILY_SUMMARY_ALARM = "th:dailySummary";
+const DAILY_SUMMARY_KEY = "th:dailySummaryLast";
+const DAILY_NOTIF_ID = "th:dailySummary:notif";
+
+/** Compute the next epoch-ms timestamp for the given local hour. */
+function nextLocalHour(hour) {
+  const h = Math.min(23, Math.max(0, Math.round(Number(hour) || 0)));
+  const now = new Date();
+  const fire = new Date(now);
+  fire.setHours(h, 0, 0, 0);
+  if (fire.getTime() <= now.getTime()) fire.setDate(fire.getDate() + 1);
+  return fire.getTime();
+}
+
+/** Count cold tabs using the same predicate as the badge. */
+async function countColdTabs() {
+  try {
+    if (!chrome?.tabs?.query) return 0;
+    const [tabs, accessed, settings] = await Promise.all([
+      chrome.tabs.query({}),
+      readLastAccessed(),
+      readSettings(),
+    ]);
+    const thresholdMs = Math.max(1, settings.idleCloseDays) * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const whitelist = sanitizeHostList(settings.coldWhitelist);
+    let cold = 0;
+    for (const t of tabs) {
+      if (isColdCloseCandidate(t, accessed, now, thresholdMs, whitelist)) cold++;
+    }
+    return cold;
+  } catch (err) {
+    console.warn(LOG_PREFIX, "countColdTabs failed:", err);
+    return 0;
+  }
+}
+
+/** Fire the summary notification if conditions warrant. */
+async function fireDailySummary() {
+  try {
+    const settings = await readSettings();
+    if (!settings.dailySummaryEnabled) return;
+    if (!chrome?.notifications?.create) return;
+    // De-dupe within the same calendar day in case the alarm fires twice.
+    const last = await chrome.storage.local.get(DAILY_SUMMARY_KEY);
+    const lastTs = Number(last?.[DAILY_SUMMARY_KEY]) || 0;
+    if (lastTs > 0) {
+      const lastDay = new Date(lastTs).toDateString();
+      const today = new Date().toDateString();
+      if (lastDay === today) return;
+    }
+    const cold = await countColdTabs();
+    if (cold <= 0) {
+      // Nothing cold today — still mark the day so we don't re-check on every event.
+      await chrome.storage.local.set({ [DAILY_SUMMARY_KEY]: Date.now() });
+      return;
+    }
+    const title = "Tab Heatmap";
+    const message = `${cold} cold tab${cold === 1 ? "" : "s"} ready to close \u2014 idle > ${settings.idleCloseDays}d.`;
+    try {
+      await new Promise((resolve) => {
+        chrome.notifications.create(DAILY_NOTIF_ID, {
+          type: "basic",
+          iconUrl: chrome.runtime.getURL("icons/icon-128.png"),
+          title,
+          message,
+          priority: 0,
+          requireInteraction: false,
+        }, () => resolve());
+      });
+    } catch (err) {
+      console.warn(LOG_PREFIX, "notifications.create failed:", err);
+    }
+    await chrome.storage.local.set({ [DAILY_SUMMARY_KEY]: Date.now() });
+  } catch (err) {
+    console.warn(LOG_PREFIX, "fireDailySummary failed:", err);
+  }
+}
+
+/** Schedule the daily summary alarm at the user's preferred hour. */
+async function ensureDailySummaryAlarm() {
+  try {
+    if (!chrome?.alarms?.create) return;
+    const settings = await readSettings();
+    if (!settings.dailySummaryEnabled) {
+      try { await chrome.alarms.clear(DAILY_SUMMARY_ALARM); } catch { /* noop */ }
+      return;
+    }
+    const when = nextLocalHour(settings.dailySummaryHour);
+    // periodInMinutes=1440 keeps it daily after the first fire.
+    chrome.alarms.create(DAILY_SUMMARY_ALARM, { when, periodInMinutes: 1440 });
+  } catch (err) {
+    console.warn(LOG_PREFIX, "ensureDailySummaryAlarm failed:", err);
+  }
+}
+
+if (chrome?.alarms?.onAlarm) {
+  chrome.alarms.onAlarm.addListener((a) => {
+    if (a?.name === DAILY_SUMMARY_ALARM) fireDailySummary();
+  });
+}
+
+// Clicking the notification opens the popup-equivalent action page so the
+// user can act on the summary immediately. Chrome doesn't let extensions
+// open the action popup programmatically, so we fall back to the options
+// page (which surfaces the same close-cold controls path).
+if (chrome?.notifications?.onClicked) {
+  chrome.notifications.onClicked.addListener((id) => {
+    if (id !== DAILY_NOTIF_ID) return;
+    try { chrome.notifications.clear(DAILY_NOTIF_ID); } catch { /* noop */ }
+    try {
+      if (chrome.runtime.openOptionsPage) chrome.runtime.openOptionsPage();
+    } catch (err) {
+      console.warn(LOG_PREFIX, "openOptionsPage failed:", err);
+    }
+  });
+}
+
+// Re-schedule when the user changes the hour or toggles the feature.
+if (chrome?.storage?.onChanged) {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local" || !changes || !changes[SETTINGS_KEY]) return;
+    const prev = changes[SETTINGS_KEY].oldValue || {};
+    const next = changes[SETTINGS_KEY].newValue || {};
+    if (prev.dailySummaryEnabled !== next.dailySummaryEnabled ||
+        prev.dailySummaryHour !== next.dailySummaryHour) {
+      ensureDailySummaryAlarm();
+    }
+  });
+}
+
+chrome.runtime.onInstalled.addListener(() => { ensureDailySummaryAlarm(); });
+chrome.runtime.onStartup.addListener(() => { ensureDailySummaryAlarm(); });
+ensureDailySummaryAlarm();
