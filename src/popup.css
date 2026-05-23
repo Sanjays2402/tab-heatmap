@@ -375,6 +375,53 @@ body {
 .tab-list.is-select-mode .tab-spark { display: none; }
 .tab-group .tab-spark { width: 48px; }
 
+.tab-audio {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-right: 6px;
+  padding: 0;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--fg-dim);
+  cursor: pointer;
+  flex: 0 0 auto;
+  transition: background 180ms var(--ease), color 180ms var(--ease), border-color 180ms var(--ease), transform 180ms var(--ease);
+}
+.tab-audio:hover {
+  background: color-mix(in oklab, var(--accent) 14%, var(--glass-hi));
+  border-color: color-mix(in oklab, var(--accent) 30%, var(--line));
+  color: var(--fg);
+}
+.tab-audio:focus-visible {
+  outline: none;
+  border-color: color-mix(in oklab, var(--accent) 60%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent) 35%, transparent);
+}
+.tab-audio--audible {
+  color: color-mix(in oklab, var(--accent) 80%, var(--fg));
+  background: color-mix(in oklab, var(--accent) 10%, transparent);
+  border-color: color-mix(in oklab, var(--accent) 24%, var(--line));
+  animation: tab-audio-pulse 2400ms var(--ease) infinite;
+}
+.tab-audio--muted {
+  color: var(--fg-faint);
+  opacity: 0.85;
+}
+.tab-audio svg { display: block; }
+.tab-list.is-select-mode .tab-audio { display: none; }
+
+@keyframes tab-audio-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--accent) 35%, transparent); }
+  50%      { box-shadow: 0 0 0 4px color-mix(in oklab, var(--accent) 0%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tab-audio--audible { animation: none; }
+}
+
 .heat-badge {
   display: inline-flex;
   align-items: center;

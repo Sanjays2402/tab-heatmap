@@ -26,4 +26,4 @@ This file is the agent's task queue. Unchecked items get implemented in order. W
 - [x] Settings: reset all heat data with confirmation
 - [x] Badge on extension icon showing count of cold tabs
 - [x] Context menu: 'Mark tab as hot' to boost heat manually
-- [ ] Audible/muted tab indicator in popup list
+- [x] Audible/muted tab indicator in popup list

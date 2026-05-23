@@ -147,6 +147,8 @@ function buildRows(tabs, accessedMap, countsMap, sparkMap) {
       favIconUrl: t.favIconUrl || "",
       active: !!t.active,
       pinned: !!t.pinned,
+      audible: !!t.audible,
+      muted: !!(t.mutedInfo && t.mutedInfo.muted),
       lastAccessed: stamp,
       activations: count,
       sparkSamples: samples,
@@ -454,6 +456,53 @@ function wireRowTooltip(li, row) {
   li.addEventListener("blur", () => hideTooltip(true));
 }
 
+/**
+ * Render an inline SVG audio indicator for a tab row.
+ * Shows a speaker icon for audible tabs and a muted-speaker icon for
+ * tabs muted via tab-mute. Returns an empty string when neither applies.
+ * Clicking the icon toggles mute; clicks don't bubble to row activation.
+ */
+function renderAudioIndicator(row) {
+  const audible = !!row.audible;
+  const muted = !!row.muted;
+  if (!audible && !muted) return "";
+  const state = muted ? "muted" : "audible";
+  const label = muted ? "Muted — click to unmute" : "Playing audio — click to mute";
+  // Phosphor-style speaker icons; stroke-width 1.5, round caps.
+  const speakerPath =
+    '<path d="M4 10v4h3l4 3V7L7 10H4z"/>' +
+    '<path d="M15 9a4 4 0 010 6"/>' +
+    '<path d="M17.5 6.5a8 8 0 010 11"/>';
+  const mutedPath =
+    '<path d="M4 10v4h3l4 3V7L7 10H4z"/>' +
+    '<path d="M15 9l5 6M20 9l-5 6"/>';
+  const path = muted ? mutedPath : speakerPath;
+  return (
+    `<button type="button" class="tab-audio tab-audio--${state}" data-audio-toggle="1" aria-pressed="${muted ? "true" : "false"}" aria-label="${label}" title="${label}">` +
+      `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${path}</svg>` +
+    `</button>`
+  );
+}
+
+/** Toggle the muted state of a tab without affecting the row click. */
+async function toggleTabMute(tabId, nextMuted) {
+  try {
+    await new Promise((resolve) => {
+      try {
+        chrome.tabs.update(tabId, { muted: !!nextMuted }, () => {
+          if (chrome.runtime.lastError) console.warn(LOG, "tabs.update mute:", chrome.runtime.lastError.message);
+          resolve();
+        });
+      } catch (err) {
+        console.warn(LOG, "tabs.update mute threw:", err);
+        resolve();
+      }
+    });
+  } catch (err) {
+    console.warn(LOG, "toggleTabMute failed:", err);
+  }
+}
+
 /** Create a single tab row element. */
 function rowElement(row) {
   const li = document.createElement("li");
@@ -482,6 +531,7 @@ function rowElement(row) {
   // Color gradient: cold blue → warm amber → hot red.
   const heatRGB = heatColor(row.heat);
 
+  const audioHTML = renderAudioIndicator(row);
   const checkboxHTML = SELECT_MODE
     ? (
       '<span class="tab-check" aria-hidden="true">' +
@@ -498,6 +548,7 @@ function rowElement(row) {
       `<div class="tab-title"></div>` +
       `<div class="tab-sub"></div>` +
     '</div>' +
+    audioHTML +
     `<span class="tab-spark" style="color:${heatRGB}" title="Activity, last 24h (${(row.sparkSamples || []).length} samples)" aria-label="24h activity">${renderSparkSVG(row.sparkSamples, Date.now(), heatRGB)}</span>` +
     `<span class="heat-badge" style="--dot-opacity:${dotOpacity};--heat-color:${heatRGB}" title="Heat ${heatPct} — recency ${(row.recency*100).toFixed(0)}% • freq ${(row.frequency*100).toFixed(0)}%">` +
       '<span class="heat-dot"></span>' +
@@ -520,6 +571,21 @@ function rowElement(row) {
     updateSelectionUI();
   };
   li.addEventListener("click", (ev) => {
+    const audioBtn = ev.target instanceof Element ? ev.target.closest("[data-audio-toggle]") : null;
+    if (audioBtn) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const nextMuted = !row.muted;
+      // Optimistic visual flip so the click feels instant.
+      audioBtn.classList.toggle("tab-audio--muted", nextMuted);
+      audioBtn.classList.toggle("tab-audio--audible", !nextMuted);
+      audioBtn.setAttribute("aria-pressed", nextMuted ? "true" : "false");
+      toggleTabMute(row.id, nextMuted).then(() => {
+        // Re-render so the indicator reflects authoritative state.
+        setTimeout(() => { render().catch(() => {}); }, 80);
+      });
+      return;
+    }
     if (SELECT_MODE) { ev.preventDefault(); toggleSelect(); }
     else activate();
   });
