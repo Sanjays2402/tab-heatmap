@@ -234,6 +234,10 @@ function rowElement(row) {
   // Set text via textContent to avoid HTML injection in titles/URLs.
   li.querySelector(".tab-title").textContent = row.title;
   li.querySelector(".tab-sub").textContent = host || (row.url ? row.url.slice(0, 64) : "");
+  if (FILTER_QUERY) {
+    highlightInto(li.querySelector(".tab-title"), row.title, FILTER_QUERY);
+    highlightInto(li.querySelector(".tab-sub"), host || (row.url ? row.url.slice(0, 64) : ""), FILTER_QUERY);
+  }
 
   const activate = () => focusTab(row.id, row.windowId);
   li.addEventListener("click", activate);
@@ -360,24 +364,43 @@ async function render() {
   applyTheme(settings.theme);
 
   const rows = buildRows(tabs, accessedResp.map || {}, countsResp.map || {});
+  const allRows = rows;
+  const q = FILTER_QUERY;
+  const filtered = q ? rows.filter((r) => rowMatchesFilter(r, q)) : rows;
   const list = document.getElementById("tab-list");
   const empty = document.getElementById("empty-state");
+  const noMatches = document.getElementById("no-matches");
+  const noMatchesSub = document.getElementById("no-matches-sub");
   const stat = document.getElementById("stat");
 
   list.innerHTML = "";
-  if (rows.length === 0) {
+  if (allRows.length === 0) {
     empty.classList.remove("hidden");
+    if (noMatches) noMatches.classList.add("hidden");
     list.classList.add("hidden");
     if (stat) stat.textContent = "0 tabs";
     return;
   }
   empty.classList.add("hidden");
+  if (filtered.length === 0) {
+    list.classList.add("hidden");
+    if (noMatches) {
+      noMatches.classList.remove("hidden");
+      if (noMatchesSub) noMatchesSub.textContent = `No matches for “${q}” among ${allRows.length} tab${allRows.length === 1 ? "" : "s"}.`;
+    }
+    if (stat) {
+      const hot = allRows.filter((r) => r.heat >= HOT_THRESHOLD).length;
+      stat.textContent = `0 of ${allRows.length} tabs • ${hot} hot`;
+    }
+    return;
+  }
+  if (noMatches) noMatches.classList.add("hidden");
   list.classList.remove("hidden");
 
   const frag = document.createDocumentFragment();
   if (GROUP_BY_HOST) {
     list.classList.add("is-grouped");
-    const groups = groupRowsByHost(rows);
+    const groups = groupRowsByHost(filtered);
     // Default: expand groups whose rollup heat ≥ HOT_THRESHOLD, collapse the rest.
     // Per-host overrides come from chrome.storage.local ("th:groupOpen:<host>").
     let overrides = {};
@@ -396,13 +419,17 @@ async function render() {
     }
   } else {
     list.classList.remove("is-grouped");
-    for (const row of rows) frag.appendChild(rowElement(row));
+    for (const row of filtered) frag.appendChild(rowElement(row));
   }
   list.appendChild(frag);
 
   if (stat) {
-    const hot = rows.filter((r) => r.heat >= HOT_THRESHOLD).length;
-    stat.textContent = `${rows.length} tabs • ${hot} hot`;
+    const hot = allRows.filter((r) => r.heat >= HOT_THRESHOLD).length;
+    if (q) {
+      stat.textContent = `${filtered.length} of ${allRows.length} tabs • ${hot} hot`;
+    } else {
+      stat.textContent = `${allRows.length} tabs • ${hot} hot`;
+    }
   }
 }
 
@@ -752,12 +779,103 @@ function wireJumpHottest() {
   });
 }
 
+/**
+ * Wire the search/filter input. Debounced re-render keeps typing snappy on
+ * windows with many tabs. Esc clears the filter; the small ✕ button does too.
+ * Cmd/Ctrl+F focuses the field for power users.
+ */
+function wireSearch() {
+  const input = document.getElementById("search-input");
+  const clear = document.getElementById("search-clear");
+  if (!input) return;
+
+  let debounce = 0;
+  function setQueryFromInput() {
+    const next = normalizeQuery(input.value);
+    if (next === FILTER_QUERY) return;
+    FILTER_QUERY = next;
+    if (clear) clear.classList.toggle("hidden", FILTER_QUERY.length === 0);
+    render().catch((err) => console.warn(LOG, "filter render failed:", err));
+  }
+
+  input.addEventListener("input", () => {
+    if (clear) clear.classList.toggle("hidden", input.value.length === 0);
+    if (debounce) clearTimeout(debounce);
+    debounce = setTimeout(setQueryFromInput, 80);
+  });
+  input.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") {
+      if (input.value) {
+        ev.preventDefault();
+        input.value = "";
+        if (debounce) clearTimeout(debounce);
+        setQueryFromInput();
+      }
+    }
+  });
+  if (clear) {
+    clear.addEventListener("click", () => {
+      input.value = "";
+      if (debounce) clearTimeout(debounce);
+      setQueryFromInput();
+      input.focus();
+    });
+  }
+  document.addEventListener("keydown", (ev) => {
+    if ((ev.metaKey || ev.ctrlKey) && (ev.key === "f" || ev.key === "F")) {
+      ev.preventDefault();
+      input.focus();
+      input.select();
+    }
+  });
+  // Autofocus on open so the user can just start typing.
+  setTimeout(() => { try { input.focus(); } catch {} }, 30);
+}
+
 function applyGroupToggleVisual(btn) {
   btn.setAttribute("aria-pressed", GROUP_BY_HOST ? "true" : "false");
   btn.classList.toggle("is-active", GROUP_BY_HOST);
 }
 
 let GROUP_BY_HOST = false;
+let FILTER_QUERY = "";
+
+/** Lowercase + trim for the filter compare. */
+function normalizeQuery(q) {
+  return typeof q === "string" ? q.trim().toLowerCase() : "";
+}
+
+/** True if the row matches the current filter query (title or url). */
+function rowMatchesFilter(row, q) {
+  if (!q) return true;
+  const hay = `${row.title || ""}\n${row.url || ""}`.toLowerCase();
+  return hay.includes(q);
+}
+
+/**
+ * Wrap occurrences of `query` in an element's text with <span class="match">.
+ * `el` must contain plain text (not HTML) — we set textContent first.
+ */
+function highlightInto(el, text, query) {
+  el.textContent = text || "";
+  if (!query) return;
+  const hay = (text || "").toLowerCase();
+  let i = hay.indexOf(query);
+  if (i < 0) return;
+  // Rebuild the element with safe text nodes + <span> matches.
+  el.textContent = "";
+  let cursor = 0;
+  while (i >= 0) {
+    if (i > cursor) el.appendChild(document.createTextNode(text.slice(cursor, i)));
+    const m = document.createElement("span");
+    m.className = "match";
+    m.textContent = text.slice(i, i + query.length);
+    el.appendChild(m);
+    cursor = i + query.length;
+    i = hay.indexOf(query, cursor);
+  }
+  if (cursor < text.length) el.appendChild(document.createTextNode(text.slice(cursor)));
+}
 
 applyTheme();
 wireSettings();
@@ -765,7 +883,8 @@ wireCloseIdle().catch((err) => console.warn(LOG, "wireCloseIdle failed:", err));
 wireExport().catch((err) => console.warn(LOG, "wireExport failed:", err));
 wireImport().catch((err) => console.warn(LOG, "wireImport failed:", err));
 wireJumpHottest();
+wireSearch();
 wireGroupToggle().then(() => render()).catch((err) => console.warn(LOG, "render failed:", err));
 
 // Expose for unit-style smoke tests in a non-extension runtime.
-export { buildRows, recencyScore, frequencyScore, heatColor, groupRowsByHost, buildSnapshot, parseSnapshot };
+export { buildRows, recencyScore, frequencyScore, heatColor, groupRowsByHost, buildSnapshot, parseSnapshot, rowMatchesFilter, normalizeQuery };

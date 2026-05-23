@@ -71,7 +71,28 @@
       <input id="import-file" type="file" accept="application/json,.json" hidden>
       <span id="toolbar-status" class="toolbar-status" role="status" aria-live="polite"></span>
     </div>
+    <div class="search" role="search">
+      <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="11" cy="11" r="7"/>
+        <path d="M20 20l-3.5-3.5"/>
+      </svg>
+      <input id="search-input" class="search-input" type="search" placeholder="Filter tabs by title or URL" autocomplete="off" spellcheck="false" aria-label="Filter tabs">
+      <button id="search-clear" class="search-clear hidden" type="button" aria-label="Clear filter" title="Clear (Esc)">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M6 6l12 12M18 6L6 18"/>
+        </svg>
+      </button>
+    </div>
     <ul id="tab-list" class="tab-list" aria-live="polite"></ul>
+    <div id="no-matches" class="empty empty--compact hidden" aria-hidden="true">
+      <svg width="56" height="56" viewBox="0 0 120 120" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="54" cy="54" r="28"/>
+        <path d="M76 76l18 18"/>
+        <path d="M42 54h24" opacity="0.6"/>
+      </svg>
+      <p class="empty-title">No tabs match</p>
+      <p class="empty-sub" id="no-matches-sub">Try a different word.</p>
+    </div>
     <div id="empty-state" class="empty hidden" aria-hidden="true">
       <svg width="96" height="96" viewBox="0 0 120 120" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <rect x="18" y="30" width="84" height="60" rx="10"/>

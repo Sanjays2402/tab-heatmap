@@ -17,3 +17,13 @@ This file is the agent's task queue. Unchecked items get implemented in order. W
 - [x] Per-domain heat decay rate
 - [x] Liquid-glass popup UI (frosted, Phosphor icons)
 - [x] Dark/light theme with auto detection
+- [x] Search/filter tabs in popup by title or URL
+- [ ] Sort tabs by heat, recency, frequency, or alphabetical
+- [ ] Hover tooltip showing last-accessed time + activation count
+- [ ] Bulk-select tabs with checkboxes and close selected
+- [ ] Heat-score sparkline (last 24h activity per tab)
+- [ ] Whitelist domains never to mark as cold
+- [ ] Settings: reset all heat data with confirmation
+- [ ] Badge on extension icon showing count of cold tabs
+- [ ] Context menu: 'Mark tab as hot' to boost heat manually
+- [ ] Audible/muted tab indicator in popup list
