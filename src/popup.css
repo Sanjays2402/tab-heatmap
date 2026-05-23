@@ -358,6 +358,23 @@ body {
   text-overflow: ellipsis;
 }
 
+.tab-spark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  width: 56px;
+  height: 16px;
+  margin-right: 6px;
+  opacity: 0.85;
+  flex: 0 0 auto;
+  transition: opacity 180ms var(--ease), transform 180ms var(--ease);
+}
+.tab-spark svg { display: block; overflow: visible; }
+.tab-spark .spark--empty { opacity: 0.55; }
+.tab-row:hover .tab-spark { opacity: 1; transform: translateY(-0.5px); }
+.tab-list.is-select-mode .tab-spark { display: none; }
+.tab-group .tab-spark { width: 48px; }
+
 .heat-badge {
   display: inline-flex;
   align-items: center;

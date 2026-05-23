@@ -123,7 +123,7 @@ function frequencyScore(count, maxCount) {
 }
 
 /** Compose a tab "row model" used for rendering and sorting. */
-function buildRows(tabs, accessedMap, countsMap) {
+function buildRows(tabs, accessedMap, countsMap, sparkMap) {
   const now = Date.now();
   const maxCount = Object.values(countsMap || {})
     .reduce((m, v) => (typeof v === "number" && v > m ? v : m), 0);
@@ -138,6 +138,7 @@ function buildRows(tabs, accessedMap, countsMap) {
     const r = recencyScore(stamp, now, hl);
     const f = frequencyScore(count, maxCount);
     const heat = RECENCY_WEIGHT * r + FREQUENCY_WEIGHT * f;
+    const samples = Array.isArray(sparkMap?.[key]) ? sparkMap[key] : [];
     return {
       id: t.id,
       windowId: t.windowId,
@@ -148,6 +149,7 @@ function buildRows(tabs, accessedMap, countsMap) {
       pinned: !!t.pinned,
       lastAccessed: stamp,
       activations: count,
+      sparkSamples: samples,
       recency: r,
       frequency: f,
       heat,
@@ -277,6 +279,76 @@ function formatRelativeTime(stamp, now) {
 function formatAbsoluteTime(stamp) {
   if (!Number.isFinite(stamp) || stamp <= 0) return "";
   try { return new Date(stamp).toLocaleString(); } catch { return ""; }
+}
+
+// Sparkline geometry. 24 hourly buckets covering the last 24h.
+const SPARK_BUCKETS = 24;
+const SPARK_WINDOW_MS = 24 * 60 * 60 * 1000;
+const SPARK_W = 56;
+const SPARK_H = 16;
+
+/** Bucketize a list of millisecond timestamps into `SPARK_BUCKETS` hourly bins
+ * ending at `now`. Returns a fixed-length integer array of counts (oldest→newest).
+ */
+function bucketizeActivity(samples, now) {
+  const out = new Array(SPARK_BUCKETS).fill(0);
+  if (!Array.isArray(samples) || samples.length === 0) return out;
+  const ref = Number.isFinite(now) ? now : Date.now();
+  const start = ref - SPARK_WINDOW_MS;
+  const span = SPARK_WINDOW_MS / SPARK_BUCKETS;
+  for (const ts of samples) {
+    if (!Number.isFinite(ts) || ts < start || ts > ref) continue;
+    let idx = Math.floor((ts - start) / span);
+    if (idx < 0) idx = 0;
+    if (idx >= SPARK_BUCKETS) idx = SPARK_BUCKETS - 1;
+    out[idx]++;
+  }
+  return out;
+}
+
+/** Build an SVG path string for a smooth area sparkline. */
+function sparkPath(buckets, w, h, pad) {
+  const n = buckets.length;
+  if (n === 0) return { line: "", area: "", max: 0 };
+  const max = buckets.reduce((m, v) => v > m ? v : m, 0);
+  const innerW = Math.max(1, w - pad * 2);
+  const innerH = Math.max(1, h - pad * 2);
+  const step = innerW / (n - 1 || 1);
+  const pts = buckets.map((v, i) => {
+    const x = pad + i * step;
+    const k = max > 0 ? v / max : 0;
+    const y = pad + innerH - k * innerH;
+    return [x, y];
+  });
+  let line = `M ${pts[0][0].toFixed(2)} ${pts[0][1].toFixed(2)}`;
+  for (let i = 1; i < pts.length; i++) {
+    line += ` L ${pts[i][0].toFixed(2)} ${pts[i][1].toFixed(2)}`;
+  }
+  const baseY = (pad + innerH).toFixed(2);
+  const area = `${line} L ${pts[n-1][0].toFixed(2)} ${baseY} L ${pts[0][0].toFixed(2)} ${baseY} Z`;
+  return { line, area, max };
+}
+
+/** Render a tab's spark as an inline SVG string. */
+function renderSparkSVG(samples, now, accentColor) {
+  const buckets = bucketizeActivity(samples, now);
+  const total = buckets.reduce((s, v) => s + v, 0);
+  if (total === 0) {
+    const y = (SPARK_H - 2).toFixed(2);
+    return (
+      `<svg class="spark spark--empty" width="${SPARK_W}" height="${SPARK_H}" viewBox="0 0 ${SPARK_W} ${SPARK_H}" aria-hidden="true">` +
+        `<path d="M 1 ${y} L ${SPARK_W - 1} ${y}" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" opacity="0.35"/>` +
+      `</svg>`
+    );
+  }
+  const { line, area, max } = sparkPath(buckets, SPARK_W, SPARK_H, 2);
+  const color = accentColor || "currentColor";
+  return (
+    `<svg class="spark" width="${SPARK_W}" height="${SPARK_H}" viewBox="0 0 ${SPARK_W} ${SPARK_H}" aria-hidden="true" data-max="${max}" data-total="${total}">` +
+      `<path d="${area}" fill="${color}" fill-opacity="0.18" stroke="none"/>` +
+      `<path d="${line}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>` +
+    `</svg>`
+  );
 }
 
 /** Singleton hover tooltip; lazily created on first use. */
@@ -426,6 +498,7 @@ function rowElement(row) {
       `<div class="tab-title"></div>` +
       `<div class="tab-sub"></div>` +
     '</div>' +
+    `<span class="tab-spark" style="color:${heatRGB}" title="Activity, last 24h (${(row.sparkSamples || []).length} samples)" aria-label="24h activity">${renderSparkSVG(row.sparkSamples, Date.now(), heatRGB)}</span>` +
     `<span class="heat-badge" style="--dot-opacity:${dotOpacity};--heat-color:${heatRGB}" title="Heat ${heatPct} — recency ${(row.recency*100).toFixed(0)}% • freq ${(row.frequency*100).toFixed(0)}%">` +
       '<span class="heat-dot"></span>' +
       `<span>${heatPct}</span>` +
@@ -556,10 +629,11 @@ function appendGroup(parent, group, expanded) {
 
 /** Top-level render. */
 async function render() {
-  const [tabs, accessedResp, countsResp] = await Promise.all([
+  const [tabs, accessedResp, countsResp, sparkResp] = await Promise.all([
     getAllTabs(),
     sendMessage(MSG.GET_LAST_ACCESSED),
     sendMessage(MSG.GET_ACTIVATION_COUNTS),
+    sendMessage(MSG.GET_ACTIVITY_SPARK),
   ]);
 
   // Hydrate user-configurable thresholds from background settings.
@@ -576,7 +650,7 @@ async function render() {
     : {};
   applyTheme(settings.theme);
 
-  const rows = buildRows(tabs, accessedResp.map || {}, countsResp.map || {});
+  const rows = buildRows(tabs, accessedResp.map || {}, countsResp.map || {}, sparkResp?.map || {});
   const sortedAll = sortRows(rows, SORT_MODE);
   const allRows = sortedAll;
   const q = FILTER_QUERY;
@@ -1306,4 +1380,4 @@ async function closeTabsByIds(ids) {
 }
 
 // Expose for unit-style smoke tests in a non-extension runtime.
-export { buildRows, recencyScore, frequencyScore, heatColor, groupRowsByHost, buildSnapshot, parseSnapshot, rowMatchesFilter, normalizeQuery, sortRows, sortGroups, formatRelativeTime, formatAbsoluteTime };
+export { buildRows, recencyScore, frequencyScore, heatColor, groupRowsByHost, buildSnapshot, parseSnapshot, rowMatchesFilter, normalizeQuery, sortRows, sortGroups, formatRelativeTime, formatAbsoluteTime, bucketizeActivity, sparkPath, renderSparkSVG };

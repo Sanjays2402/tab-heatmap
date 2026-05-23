@@ -12,6 +12,7 @@ const MSG = Object.freeze({
   JUMP_HOTTEST: "th:jumpHottest",
   GET_LAST_ACCESSED: "th:getLastAccessed",
   GET_ACTIVATION_COUNTS: "th:getActivationCounts",
+  GET_ACTIVITY_SPARK: "th:getActivitySpark",
   CLOSE_IDLE: "th:closeIdle",
   GET_SETTINGS: "th:getSettings",
   SET_SETTINGS: "th:setSettings",
@@ -177,6 +178,12 @@ async function closeIdleTabs(days) {
 const LAST_ACCESSED_KEY = "th:lastAccessed";
 /** Storage key namespace for per-tab activation-count map. */
 const ACTIVATION_COUNT_KEY = "th:activationCounts";
+/** Storage key namespace for per-tab activity sparkline buffer (rolling 24h). */
+const ACTIVITY_SPARK_KEY = "th:activitySpark";
+/** Rolling window kept for sparkline rendering. */
+const SPARK_WINDOW_MS = 24 * 60 * 60 * 1000;
+/** Hard cap per-tab to bound storage even on hyperactive tabs. */
+const SPARK_MAX_SAMPLES = 240;
 
 /** Read the persisted last-accessed map. Returns {} if uninitialized. */
 async function readLastAccessed() {
@@ -199,6 +206,38 @@ async function stampTab(tabId, ts = Date.now()) {
     await chrome.storage.session.set({ [LAST_ACCESSED_KEY]: map });
   } catch (err) {
     console.warn(LOG_PREFIX, "stampTab failed:", err);
+  }
+}
+
+/** Read the persisted per-tab activity-sample map. Returns {} if uninitialized. */
+async function readActivitySpark() {
+  try {
+    const out = await chrome.storage.session.get(ACTIVITY_SPARK_KEY);
+    const map = out?.[ACTIVITY_SPARK_KEY];
+    return (map && typeof map === "object") ? map : {};
+  } catch (err) {
+    console.warn(LOG_PREFIX, "readActivitySpark failed:", err);
+    return {};
+  }
+}
+
+/** Append an activity sample for a tab; prunes to the rolling 24h window. */
+async function recordActivity(tabId, ts = Date.now()) {
+  if (typeof tabId !== "number" || tabId < 0) return;
+  try {
+    const map = await readActivitySpark();
+    const key = String(tabId);
+    const cutoff = ts - SPARK_WINDOW_MS;
+    const prev = Array.isArray(map[key]) ? map[key] : [];
+    // Filter old + keep numeric; append new sample; cap length.
+    const next = [];
+    for (const v of prev) if (typeof v === "number" && v >= cutoff) next.push(v);
+    next.push(ts);
+    if (next.length > SPARK_MAX_SAMPLES) next.splice(0, next.length - SPARK_MAX_SAMPLES);
+    map[key] = next;
+    await chrome.storage.session.set({ [ACTIVITY_SPARK_KEY]: map });
+  } catch (err) {
+    console.warn(LOG_PREFIX, "recordActivity failed:", err);
   }
 }
 
@@ -231,17 +270,20 @@ async function bumpActivation(tabId) {
 async function forgetTab(tabId) {
   try {
     const key = String(tabId);
-    const [accessed, counts] = await Promise.all([
+    const [accessed, counts, spark] = await Promise.all([
       readLastAccessed(),
       readActivationCounts(),
+      readActivitySpark(),
     ]);
-    let dirtyA = false, dirtyC = false;
+    let dirtyA = false, dirtyC = false, dirtyS = false;
     if (key in accessed) { delete accessed[key]; dirtyA = true; }
     if (key in counts) { delete counts[key]; dirtyC = true; }
+    if (key in spark) { delete spark[key]; dirtyS = true; }
     const writes = {};
     if (dirtyA) writes[LAST_ACCESSED_KEY] = accessed;
     if (dirtyC) writes[ACTIVATION_COUNT_KEY] = counts;
-    if (dirtyA || dirtyC) await chrome.storage.session.set(writes);
+    if (dirtyS) writes[ACTIVITY_SPARK_KEY] = spark;
+    if (dirtyA || dirtyC || dirtyS) await chrome.storage.session.set(writes);
   } catch (err) {
     console.warn(LOG_PREFIX, "forgetTab failed:", err);
   }
@@ -339,12 +381,16 @@ if (chrome?.tabs?.onActivated) {
   chrome.tabs.onActivated.addListener(({ tabId }) => {
     stampTab(tabId);
     bumpActivation(tabId);
+    recordActivity(tabId);
   });
 }
 // A tab finishing a navigation/load also counts as access.
 if (chrome?.tabs?.onUpdated) {
   chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-    if (changeInfo?.status === "complete") stampTab(tabId);
+    if (changeInfo?.status === "complete") {
+      stampTab(tabId);
+      recordActivity(tabId);
+    }
   });
 }
 // Forget tabs as they close so the map doesn't drift.
@@ -403,6 +449,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === MSG.GET_ACTIVATION_COUNTS) {
     readActivationCounts().then((map) => sendResponse({ ok: true, map }));
     return true; // async response
+  }
+  if (msg.type === MSG.GET_ACTIVITY_SPARK) {
+    readActivitySpark().then((map) => sendResponse({ ok: true, map, windowMs: SPARK_WINDOW_MS }));
+    return true;
   }
   if (msg.type === MSG.GET_SETTINGS) {
     readSettings().then((settings) => sendResponse({ ok: true, settings }));
