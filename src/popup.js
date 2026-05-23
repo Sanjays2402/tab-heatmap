@@ -99,6 +99,30 @@ function buildRows(tabs, accessedMap, countsMap) {
   }).sort((a, b) => b.heat - a.heat);
 }
 
+/**
+ * Map a heat score in [0,1] to a CSS color along the gradient:
+ *   cold (≤0)   → blue   #3da3ff
+ *   mid  (0.5)  → amber  #ffb547
+ *   hot  (≥1)   → red    #ff3b2f
+ * Linear RGB interpolation between the two anchors that bracket `heat`.
+ */
+function heatColor(heat) {
+  const t = Math.min(1, Math.max(0, Number.isFinite(heat) ? heat : 0));
+  const cold  = [0x3d, 0xa3, 0xff];
+  const amber = [0xff, 0xb5, 0x47];
+  const hot   = [0xff, 0x3b, 0x2f];
+  const lerp = (a, b, k) => Math.round(a + (b - a) * k);
+  let rgb;
+  if (t <= 0.5) {
+    const k = t / 0.5;
+    rgb = [0, 1, 2].map((i) => lerp(cold[i], amber[i], k));
+  } else {
+    const k = (t - 0.5) / 0.5;
+    rgb = [0, 1, 2].map((i) => lerp(amber[i], hot[i], k));
+  }
+  return `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+}
+
 /** Safely derive a short hostname from a URL string. */
 function hostnameOf(url) {
   try { return new URL(url).hostname.replace(/^www\./, ""); }
@@ -135,8 +159,10 @@ function rowElement(row) {
 
   const host = hostnameOf(row.url);
   const heatPct = Math.round(row.heat * 100);
-  // Dot opacity grows with heat for a subtle cue (color gradient comes next item).
+  // Dot opacity grows with heat for a subtle cue.
   const dotOpacity = (0.3 + row.heat * 0.7).toFixed(2);
+  // Color gradient: cold blue → warm amber → hot red.
+  const heatRGB = heatColor(row.heat);
 
   li.innerHTML =
     faviconHTML +
@@ -144,7 +170,7 @@ function rowElement(row) {
       `<div class="tab-title"></div>` +
       `<div class="tab-sub"></div>` +
     '</div>' +
-    `<span class="heat-badge" style="--dot-opacity:${dotOpacity}" title="Heat ${heatPct} — recency ${(row.recency*100).toFixed(0)}% • freq ${(row.frequency*100).toFixed(0)}%">` +
+    `<span class="heat-badge" style="--dot-opacity:${dotOpacity};--heat-color:${heatRGB}" title="Heat ${heatPct} — recency ${(row.recency*100).toFixed(0)}% • freq ${(row.frequency*100).toFixed(0)}%">` +
       '<span class="heat-dot"></span>' +
       `<span>${heatPct}</span>` +
     '</span>';
@@ -223,4 +249,4 @@ wireSettings();
 render().catch((err) => console.warn(LOG, "render failed:", err));
 
 // Expose for unit-style smoke tests in a non-extension runtime.
-export { buildRows, recencyScore, frequencyScore };
+export { buildRows, recencyScore, frequencyScore, heatColor };

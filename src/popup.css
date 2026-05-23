@@ -196,19 +196,24 @@ body {
   gap: 6px;
   padding: 3px 8px;
   border-radius: 999px;
-  background: var(--glass-hi);
-  border: 1px solid var(--line);
+  background:
+    linear-gradient(135deg, color-mix(in oklab, var(--heat-color, var(--accent)) 18%, transparent), transparent 70%),
+    var(--glass-hi);
+  border: 1px solid color-mix(in oklab, var(--heat-color, var(--accent)) 28%, var(--line));
   font-variant-numeric: tabular-nums;
   font-size: 10.5px;
   color: var(--fg-dim);
   white-space: nowrap;
+  transition: background 200ms var(--ease), border-color 200ms var(--ease);
 }
 .heat-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--heat-color, var(--accent));
   opacity: var(--dot-opacity, 0.6);
+  box-shadow: 0 0 6px color-mix(in oklab, var(--heat-color, var(--accent)) 70%, transparent);
+  transition: background 200ms var(--ease), box-shadow 200ms var(--ease);
 }
 
 .empty {
