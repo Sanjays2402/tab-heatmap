@@ -435,6 +435,65 @@ function sparkPath(buckets, w, h, pad) {
   return { line, area, max };
 }
 
+/** Compute a heat trend signal from the rolling-24h samples.
+ * Returns { dir: -1|0|1, magnitude: 0..1, recent, prior }.
+ *   dir =  1 → rising (recent half has more activity than prior half)
+ *   dir = -1 → falling
+ *   dir =  0 → flat / insufficient signal
+ * The magnitude is a normalized 0..1 distance from "flat" used to scale the
+ * arrow's tilt and opacity.
+ */
+function computeHeatTrend(samples, now) {
+  const buckets = bucketizeActivity(samples, now);
+  const n = buckets.length;
+  if (n < 2) return { dir: 0, magnitude: 0, recent: 0, prior: 0 };
+  const mid = Math.floor(n / 2);
+  let prior = 0;
+  let recent = 0;
+  for (let i = 0; i < mid; i++) prior += buckets[i];
+  for (let i = mid; i < n; i++) recent += buckets[i];
+  const total = prior + recent;
+  // Need at least a couple of samples to call a trend honestly.
+  if (total < 2) return { dir: 0, magnitude: 0, recent, prior };
+  // Signed ratio in [-1, 1]: +1 = all recent, -1 = all prior, 0 = even.
+  const ratio = (recent - prior) / total;
+  const FLAT_BAND = 0.15; // anything inside ±15% counts as flat
+  if (Math.abs(ratio) < FLAT_BAND) return { dir: 0, magnitude: 0, recent, prior };
+  const dir = ratio > 0 ? 1 : -1;
+  const magnitude = Math.min(1, (Math.abs(ratio) - FLAT_BAND) / (1 - FLAT_BAND));
+  return { dir, magnitude, recent, prior };
+}
+
+/** Render a tab's heat trend as an inline SVG arrow. Phosphor-style stroke. */
+function renderTrendSVG(trend) {
+  const dir = trend && trend.dir ? trend.dir : 0;
+  const mag = trend && Number.isFinite(trend.magnitude) ? trend.magnitude : 0;
+  if (dir === 0) {
+    // Flat: short horizontal dash, low opacity.
+    return (
+      '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+        '<path d="M5 12h14"/>' +
+      '</svg>'
+    );
+  }
+  // Up arrow points NE; down arrow points SE. Magnitude doesn't change the
+  // glyph (kept legible) — the row's class controls color + opacity.
+  if (dir > 0) {
+    return (
+      '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+        '<path d="M7 17L17 7"/>' +
+        '<path d="M9 7h8v8"/>' +
+      '</svg>'
+    );
+  }
+  return (
+    '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<path d="M7 7L17 17"/>' +
+      '<path d="M17 9v8h-8"/>' +
+    '</svg>'
+  );
+}
+
 /** Render a tab's spark as an inline SVG string. */
 function renderSparkSVG(samples, now, accentColor) {
   const buckets = bucketizeActivity(samples, now);
@@ -636,6 +695,19 @@ function rowElement(row) {
   const heatRGB = heatColor(row.heat);
 
   const audioHTML = renderAudioIndicator(row);
+  const trend = computeHeatTrend(row.sparkSamples, Date.now());
+  const trendDirLabel = trend.dir > 0 ? "rising" : (trend.dir < 0 ? "falling" : "flat");
+  const trendPct = Math.round(trend.magnitude * 100);
+  const trendOpacity = trend.dir === 0 ? 0.45 : (0.55 + trend.magnitude * 0.45).toFixed(2);
+  const trendClass = "tab-trend tab-trend--" + (trend.dir > 0 ? "up" : trend.dir < 0 ? "down" : "flat");
+  const trendTitle = trend.dir === 0
+    ? "Heat trend: flat (last 24h)"
+    : `Heat trend: ${trendDirLabel} ${trendPct}% — recent ${trend.recent} vs prior ${trend.prior} (last 24h)`;
+  const trendHTML = (
+    `<span class="${trendClass}" style="opacity:${trendOpacity}" title="${trendTitle}" aria-label="Heat trend ${trendDirLabel}">` +
+      renderTrendSVG(trend) +
+    `</span>`
+  );
   const ageMs = (Number.isFinite(row.firstOpened) && row.firstOpened > 0)
     ? Math.max(0, Date.now() - row.firstOpened)
     : -1;
@@ -666,6 +738,7 @@ function rowElement(row) {
     '</div>' +
     audioHTML +
     ageHTML +
+    trendHTML +
     `<span class="tab-spark" style="color:${heatRGB}" title="Activity, last 24h (${(row.sparkSamples || []).length} samples)" aria-label="24h activity">${renderSparkSVG(row.sparkSamples, Date.now(), heatRGB)}</span>` +
     `<span class="heat-badge" style="--dot-opacity:${dotOpacity};--heat-color:${heatRGB}" title="Heat ${heatPct} — recency ${(row.recency*100).toFixed(0)}% • freq ${(row.frequency*100).toFixed(0)}%">` +
       '<span class="heat-dot"></span>' +
@@ -2111,4 +2184,4 @@ async function wireGroupFilter() {
 }
 
 // Expose for unit-style smoke tests in a non-extension runtime.
-export { buildRows, recencyScore, frequencyScore, heatColor, groupRowsByHost, buildSnapshot, parseSnapshot, rowMatchesFilter, normalizeQuery, sortRows, sortGroups, formatRelativeTime, formatAbsoluteTime, formatCompactAge, formatAbsoluteAgo, bucketizeActivity, sparkPath, renderSparkSVG, buildHeatHistogram, HIST_BUCKETS, applyGroupFilter, tabGroupColorCss, collectColdTabs, writeClipboardText };
+export { buildRows, recencyScore, frequencyScore, heatColor, groupRowsByHost, buildSnapshot, parseSnapshot, rowMatchesFilter, normalizeQuery, sortRows, sortGroups, formatRelativeTime, formatAbsoluteTime, formatCompactAge, formatAbsoluteAgo, bucketizeActivity, sparkPath, renderSparkSVG, computeHeatTrend, renderTrendSVG, buildHeatHistogram, HIST_BUCKETS, applyGroupFilter, tabGroupColorCss, collectColdTabs, writeClipboardText };
