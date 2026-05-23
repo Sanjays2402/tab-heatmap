@@ -354,6 +354,44 @@ function buildHeatHistogram(rows, hotThreshold) {
   return { counts, max, total: rows.length, hot, cold, hotThreshold: cutHot };
 }
 
+/** Render the heat mini-map: a compact grid where each cell is one tab,
+ * colored by its current heat. Clicking a cell focuses that tab. */
+function renderHeatMinimap(rows) {
+  const wrap = document.getElementById("heat-minimap");
+  const grid = document.getElementById("hm-grid");
+  const meta = document.getElementById("hm-meta");
+  if (!wrap || !grid) return;
+  if (!rows || rows.length === 0) {
+    wrap.classList.add("hidden");
+    grid.innerHTML = "";
+    return;
+  }
+  wrap.classList.remove("hidden");
+  grid.innerHTML = "";
+  const frag = document.createDocumentFragment();
+  let hot = 0;
+  for (const row of rows) {
+    const h = Math.max(0, Math.min(1, Number.isFinite(row.heat) ? row.heat : 0));
+    if (h >= HOT_THRESHOLD) hot++;
+    const cell = document.createElement("button");
+    cell.type = "button";
+    cell.className = "hm-cell";
+    if (row.pinned) cell.classList.add("is-pinned");
+    if (row.active) cell.classList.add("is-active");
+    cell.style.setProperty("--cell-color", heatColor(h));
+    cell.setAttribute("role", "listitem");
+    cell.setAttribute("data-tab-id", String(row.id));
+    cell.setAttribute("data-window-id", String(row.windowId ?? ""));
+    const title = (row.title && row.title.trim()) || (row.url ? row.url.slice(0, 64) : "Untitled");
+    cell.title = `${title} — heat ${Math.round(h * 100)}%${row.pinned ? " • pinned" : ""}`;
+    cell.setAttribute("aria-label", cell.title);
+    cell.addEventListener("click", () => focusTab(row.id, row.windowId));
+    frag.appendChild(cell);
+  }
+  grid.appendChild(frag);
+  if (meta) meta.textContent = `${rows.length} tab${rows.length === 1 ? "" : "s"} • ${hot} hot`;
+}
+
 /** Render the heat histogram into the popup; hidden when no tabs. */
 function renderHeatHistogram(rows) {
   const wrap = document.getElementById("heat-histogram");
@@ -921,6 +959,7 @@ async function render() {
   const sortedAll = sortRows(rows, SORT_MODE);
   const allRows = sortedAll;
   renderHeatHistogram(allRows);
+  renderHeatMinimap(allRows);
   const q = FILTER_QUERY;
   const groupFiltered = applyGroupFilter(sortedAll);
   const filtered = q ? groupFiltered.filter((r) => rowMatchesFilter(r, q)) : groupFiltered;
@@ -2444,4 +2483,4 @@ async function wireGroupFilter() {
 }
 
 // Expose for unit-style smoke tests in a non-extension runtime.
-export { buildRows, recencyScore, frequencyScore, heatColor, groupRowsByHost, buildSnapshot, parseSnapshot, rowMatchesFilter, normalizeQuery, sortRows, sortGroups, formatRelativeTime, formatAbsoluteTime, formatCompactAge, formatAbsoluteAgo, bucketizeActivity, sparkPath, renderSparkSVG, computeHeatTrend, renderTrendSVG, buildHeatHistogram, HIST_BUCKETS, applyGroupFilter, tabGroupColorCss, collectColdTabs, writeClipboardText, countColdCandidates, countPinHotCandidates };
+export { buildRows, recencyScore, frequencyScore, heatColor, groupRowsByHost, buildSnapshot, parseSnapshot, rowMatchesFilter, normalizeQuery, sortRows, sortGroups, formatRelativeTime, formatAbsoluteTime, formatCompactAge, formatAbsoluteAgo, bucketizeActivity, sparkPath, renderSparkSVG, computeHeatTrend, renderTrendSVG, buildHeatHistogram, HIST_BUCKETS, renderHeatMinimap, applyGroupFilter, tabGroupColorCss, collectColdTabs, writeClipboardText, countColdCandidates, countPinHotCandidates };
