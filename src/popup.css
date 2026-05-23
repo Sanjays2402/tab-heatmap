@@ -12,6 +12,8 @@
   --line: rgba(255, 255, 255, 0.08);
   --glass: rgba(255, 255, 255, 0.04);
   --glass-hi: rgba(255, 255, 255, 0.09);
+  --glass-rim: inset 0 1px 0 rgba(255, 255, 255, 0.08), inset 0 -1px 0 rgba(0, 0, 0, 0.18);
+  --glass-rim-strong: inset 0 1px 0 rgba(255, 255, 255, 0.12), inset 0 -1px 0 rgba(0, 0, 0, 0.22);
   --ring: rgba(255, 122, 61, 0.6);
 }
 
@@ -24,6 +26,8 @@ body[data-theme="light"] {
   --line: rgba(0, 0, 0, 0.08);
   --glass: rgba(255, 255, 255, 0.55);
   --glass-hi: rgba(255, 255, 255, 0.78);
+  --glass-rim: inset 0 1px 0 rgba(255, 255, 255, 0.85), inset 0 -1px 0 rgba(0, 0, 0, 0.04);
+  --glass-rim-strong: inset 0 1px 0 rgba(255, 255, 255, 0.95), inset 0 -1px 0 rgba(0, 0, 0, 0.06);
 }
 
 * { box-sizing: border-box; }
@@ -59,12 +63,25 @@ body {
   width: 220px; height: 220px;
   background: radial-gradient(circle, var(--accent) 0%, transparent 70%);
   top: -60px; right: -60px;
+  animation: blob-drift-a 18s var(--ease) infinite alternate;
 }
 .blob-b {
   width: 260px; height: 260px;
   background: radial-gradient(circle, #3da3ff 0%, transparent 70%);
   bottom: -100px; left: -80px;
   opacity: 0.28;
+  animation: blob-drift-b 22s var(--ease) infinite alternate;
+}
+@keyframes blob-drift-a {
+  from { transform: translate3d(0,0,0) scale(1); }
+  to { transform: translate3d(-18px, 14px, 0) scale(1.06); }
+}
+@keyframes blob-drift-b {
+  from { transform: translate3d(0,0,0) scale(1); }
+  to { transform: translate3d(22px, -18px, 0) scale(1.08); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .blob-a, .blob-b { animation: none; }
 }
 
 .topbar,
@@ -77,9 +94,12 @@ body {
   justify-content: space-between;
   padding: 14px 16px;
   border-bottom: 1px solid var(--line);
-  backdrop-filter: blur(20px) saturate(140%);
-  -webkit-backdrop-filter: blur(20px) saturate(140%);
-  background: var(--glass);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.04), transparent 60%),
+    var(--glass);
+  box-shadow: var(--glass-rim);
 }
 .title-wrap { display: flex; align-items: center; gap: 8px; }
 .brand-icon { color: var(--accent); }
@@ -97,7 +117,10 @@ body {
   height: 30px;
   padding: 0;
   cursor: pointer;
-  transition: background 200ms var(--ease), transform 200ms var(--ease);
+  box-shadow: var(--glass-rim);
+  backdrop-filter: blur(12px) saturate(160%);
+  -webkit-backdrop-filter: blur(12px) saturate(160%);
+  transition: background 200ms var(--ease), transform 200ms var(--ease), box-shadow 200ms var(--ease);
 }
 .icon-btn:hover { background: rgba(255,255,255,.14); }
 .icon-btn:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
@@ -135,9 +158,10 @@ body {
   font-weight: 500;
   letter-spacing: -0.01em;
   cursor: pointer;
-  transition: background 200ms var(--ease), border-color 200ms var(--ease), transform 200ms var(--ease), opacity 200ms var(--ease);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  box-shadow: var(--glass-rim);
+  transition: background 200ms var(--ease), border-color 200ms var(--ease), transform 200ms var(--ease), opacity 200ms var(--ease), box-shadow 200ms var(--ease);
+  backdrop-filter: blur(16px) saturate(170%);
+  -webkit-backdrop-filter: blur(16px) saturate(170%);
 }
 .action-btn:hover {
   background:
@@ -198,10 +222,15 @@ body {
   gap: 10px;
   padding: 8px 10px;
   border-radius: var(--radius);
-  background: var(--glass);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.03), transparent 70%),
+    var(--glass);
   border: 1px solid var(--line);
+  box-shadow: var(--glass-rim);
+  backdrop-filter: blur(14px) saturate(150%);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
   cursor: pointer;
-  transition: background 200ms var(--ease), border-color 200ms var(--ease), transform 200ms var(--ease);
+  transition: background 200ms var(--ease), border-color 200ms var(--ease), transform 200ms var(--ease), box-shadow 200ms var(--ease);
   position: relative;
   overflow: hidden;
 }
@@ -308,7 +337,12 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  backdrop-filter: blur(20px);
+  background:
+    linear-gradient(0deg, rgba(255,255,255,.03), transparent 60%),
+    var(--glass);
+  box-shadow: var(--glass-rim);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
 }
 
 @keyframes row-in {
@@ -325,8 +359,13 @@ body {
   display: flex;
   flex-direction: column;
   border-radius: var(--radius);
-  background: var(--glass);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.04), transparent 60%),
+    var(--glass);
   border: 1px solid var(--line);
+  box-shadow: var(--glass-rim-strong);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
   overflow: hidden;
   animation: row-in 240ms var(--ease) both;
 }
