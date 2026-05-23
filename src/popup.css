@@ -206,6 +206,79 @@ body {
 }
 .toolbar-status.is-warn { color: color-mix(in oklab, #ff3b2f 70%, var(--fg)); }
 
+.quick-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+  cursor: pointer;
+  border: 1px solid var(--line);
+  background:
+    linear-gradient(135deg, color-mix(in oklab, var(--chip-tint, var(--accent)) 14%, transparent), transparent 60%),
+    var(--glass);
+  box-shadow: var(--glass-rim);
+  backdrop-filter: blur(14px) saturate(160%);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
+  transition: background 200ms var(--ease), border-color 200ms var(--ease), transform 200ms var(--ease), opacity 200ms var(--ease), box-shadow 200ms var(--ease);
+}
+.chip:hover {
+  background:
+    linear-gradient(135deg, color-mix(in oklab, var(--chip-tint, var(--accent)) 26%, transparent), transparent 60%),
+    var(--glass-hi);
+  border-color: color-mix(in oklab, var(--chip-tint, var(--accent)) 45%, var(--line));
+}
+.chip:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.chip:active { transform: scale(0.96); }
+.chip[disabled], .chip.is-empty {
+  opacity: 0.42;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+.chip.is-confirming {
+  background:
+    linear-gradient(135deg, color-mix(in oklab, var(--chip-tint, #ff3b2f) 36%, transparent), transparent 60%),
+    var(--glass-hi);
+  border-color: color-mix(in oklab, var(--chip-tint, #ff3b2f) 60%, var(--line));
+}
+.chip.is-busy { opacity: 0.7; }
+.chip--danger  { --chip-tint: #ff3b2f; }
+.chip--neutral { --chip-tint: #3da3ff; }
+.chip--accent  { --chip-tint: var(--accent); }
+.chip-icon { color: var(--chip-tint, var(--accent)); flex: 0 0 14px; }
+.chip-label { white-space: nowrap; }
+.chip-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--chip-tint, var(--accent)) 28%, transparent);
+  color: var(--fg);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  border: 1px solid color-mix(in oklab, var(--chip-tint, var(--accent)) 36%, var(--line));
+}
+.chip.is-empty .chip-count {
+  background: rgba(255,255,255,.06);
+  color: var(--fg-faint);
+  border-color: var(--line);
+}
+
 .search {
   position: relative;
   display: flex;

@@ -35,5 +35,5 @@ This file is the agent's task queue. Unchecked items get implemented in order. W
 - [x] Copy all cold tab URLs to clipboard before closing
 - [x] Daily summary notification: 'X cold tabs ready to close'
 - [x] Heat trend arrow (rising/falling) next to each tab
-- [ ] Quick-action chips in popup: Close Cold, Suspend Cold, Pin Hot
+- [x] Quick-action chips in popup: Close Cold, Suspend Cold, Pin Hot
 - [ ] Per-window heat scoreboard in popup header

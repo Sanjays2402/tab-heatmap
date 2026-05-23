@@ -988,6 +988,204 @@ async function render() {
       stat.textContent = `${allRows.length} tabs • ${hot} hot`;
     }
   }
+
+  // Refresh quick-action chip counts from the full row set.
+  LAST_ROWS = allRows;
+  refreshQuickChipCounts(allRows);
+}
+
+/** Most recent allRows from render(); used by chip handlers. */
+let LAST_ROWS = [];
+/** Last-known idleCloseDays threshold, hydrated by wireQuickChips() on init. */
+let IDLE_DAYS = 7;
+
+/** Count cold-close candidates among rows using the same predicate as the SW. */
+function countColdCandidates(rows, days) {
+  const now = Date.now();
+  const thresholdMs = Math.max(1, days) * 24 * 60 * 60 * 1000;
+  let n = 0;
+  for (const r of rows || []) {
+    if (!r || r.pinned || r.active || r.audible) continue;
+    if (!Number.isFinite(r.lastAccessed) || r.lastAccessed <= 0) continue;
+    if (now - r.lastAccessed >= thresholdMs) n++;
+  }
+  return n;
+}
+
+/** Count hot unpinned tabs that the pin-hot chip would act on. */
+function countPinHotCandidates(rows) {
+  let n = 0;
+  for (const r of rows || []) {
+    if (!r || r.pinned) continue;
+    if (!Number.isFinite(r.heat)) continue;
+    if (r.heat >= HOT_THRESHOLD) n++;
+  }
+  return n;
+}
+
+/** Update chip counts + disabled visuals from the current row set. */
+function refreshQuickChipCounts(rows) {
+  const closeEl = document.getElementById("chip-close-cold");
+  const suspendEl = document.getElementById("chip-suspend-cold");
+  const pinEl = document.getElementById("chip-pin-hot");
+  const closeN = countColdCandidates(rows, IDLE_DAYS);
+  const pinN = countPinHotCandidates(rows);
+  if (closeEl) {
+    const c = document.getElementById("chip-close-cold-count");
+    if (c) c.textContent = String(closeN);
+    closeEl.classList.toggle("is-empty", closeN === 0);
+    closeEl.title = closeN === 0
+      ? `No tabs idle over ${IDLE_DAYS}d`
+      : `Close ${closeN} tab${closeN === 1 ? "" : "s"} idle > ${IDLE_DAYS}d`;
+  }
+  if (suspendEl) {
+    const c = document.getElementById("chip-suspend-cold-count");
+    if (c) c.textContent = String(closeN);
+    suspendEl.classList.toggle("is-empty", closeN === 0);
+    suspendEl.title = closeN === 0
+      ? `No tabs idle over ${IDLE_DAYS}d`
+      : `Suspend ${closeN} tab${closeN === 1 ? "" : "s"} idle > ${IDLE_DAYS}d`;
+  }
+  if (pinEl) {
+    const c = document.getElementById("chip-pin-hot-count");
+    if (c) c.textContent = String(pinN);
+    pinEl.classList.toggle("is-empty", pinN === 0);
+    pinEl.title = pinN === 0
+      ? "No unpinned hot tabs"
+      : `Pin ${pinN} hot tab${pinN === 1 ? "" : "s"}`;
+  }
+}
+
+/**
+ * Wire the quick-action chips strip: Close Cold, Suspend Cold, Pin Hot.
+ * Each chip uses a brief two-step confirm pattern (consistent with the
+ * toolbar's full-width buttons) to prevent accidental nukes.
+ */
+async function wireQuickChips() {
+  const closeChip = document.getElementById("chip-close-cold");
+  const suspendChip = document.getElementById("chip-suspend-cold");
+  const pinChip = document.getElementById("chip-pin-hot");
+  const status = document.getElementById("toolbar-status");
+  if (!closeChip && !suspendChip && !pinChip) return;
+
+  const settings = await sendMessage(MSG.GET_SETTINGS).then((r) => r?.settings || {});
+  IDLE_DAYS = Number.isFinite(settings.idleCloseDays) && settings.idleCloseDays > 0
+    ? settings.idleCloseDays
+    : 7;
+  refreshQuickChipCounts(LAST_ROWS);
+
+  function setStatus(text, warn) {
+    if (!status) return;
+    status.textContent = text || "";
+    status.classList.toggle("is-warn", !!warn);
+  }
+
+  /** Two-step confirm runner: first click arms (4s), second click executes. */
+  function makeChipHandler(chip, computeCount, armedLabelFn, runFn) {
+    if (!chip) return;
+    const labelEl = chip.querySelector(".chip-label");
+    const originalLabel = labelEl ? labelEl.textContent : "";
+    let armed = false;
+    let timer = 0;
+    function disarm() {
+      armed = false;
+      chip.classList.remove("is-confirming");
+      if (labelEl) labelEl.textContent = originalLabel;
+      if (timer) { clearTimeout(timer); timer = 0; }
+    }
+    chip.addEventListener("click", async (ev) => {
+      ev.preventDefault();
+      if (chip.classList.contains("is-empty")) return;
+      if (!armed) {
+        const n = computeCount();
+        if (n <= 0) {
+          setStatus("Nothing to do", false);
+          return;
+        }
+        armed = true;
+        chip.classList.add("is-confirming");
+        if (labelEl) labelEl.textContent = armedLabelFn(n);
+        setStatus("Click again to confirm", true);
+        timer = setTimeout(disarm, 4000);
+        return;
+      }
+      disarm();
+      chip.classList.add("is-busy");
+      chip.setAttribute("disabled", "true");
+      try { await runFn(); }
+      finally {
+        chip.removeAttribute("disabled");
+        chip.classList.remove("is-busy");
+      }
+      setTimeout(() => { render().catch(() => {}); }, 150);
+    });
+  }
+
+  makeChipHandler(
+    closeChip,
+    () => countColdCandidates(LAST_ROWS, IDLE_DAYS),
+    (n) => `Close ${n} cold?`,
+    async () => {
+      setStatus("Closing\u2026", false);
+      // Snapshot candidates ourselves so the undo toast has metadata even if
+      // the SW doesn't pass closedTabs back.
+      const ids = LAST_ROWS
+        .filter((r) => !r.pinned && !r.active && !r.audible && r.lastAccessed > 0 && (Date.now() - r.lastAccessed) >= IDLE_DAYS * 86400000)
+        .map((r) => r.id);
+      const result = await closeTabsByIds(ids);
+      const c = result?.count || 0;
+      if (c === 0) {
+        setStatus("Nothing to close", false);
+      } else {
+        setStatus("", false);
+        showUndoToast(c, result.closedTabs || []);
+      }
+    }
+  );
+
+  makeChipHandler(
+    suspendChip,
+    () => countColdCandidates(LAST_ROWS, IDLE_DAYS),
+    (n) => `Suspend ${n} cold?`,
+    async () => {
+      setStatus("Suspending\u2026", false);
+      const result = await sendMessage(MSG.SUSPEND_IDLE, { days: IDLE_DAYS });
+      if (result?.ok) {
+        const s = result.suspended || 0;
+        setStatus(s === 0 ? "Nothing suspended" : `Suspended ${s} tab${s === 1 ? "" : "s"}`, false);
+      } else {
+        setStatus(result?.error ? `Failed: ${result.error}` : "Failed", true);
+      }
+    }
+  );
+
+  makeChipHandler(
+    pinChip,
+    () => countPinHotCandidates(LAST_ROWS),
+    (n) => `Pin ${n} hot?`,
+    async () => {
+      setStatus("Pinning\u2026", false);
+      const targets = LAST_ROWS.filter((r) => !r.pinned && Number.isFinite(r.heat) && r.heat >= HOT_THRESHOLD);
+      let pinned = 0;
+      for (const r of targets) {
+        try {
+          await new Promise((resolve) => {
+            try {
+              chrome.tabs.update(r.id, { pinned: true }, () => {
+                if (chrome.runtime.lastError) console.warn(LOG, "tabs.update pin:", chrome.runtime.lastError.message);
+                else pinned++;
+                resolve();
+              });
+            } catch (err) {
+              console.warn(LOG, "tabs.update pin threw:", err);
+              resolve();
+            }
+          });
+        } catch { /* skip */ }
+      }
+      setStatus(pinned === 0 ? "Nothing pinned" : `Pinned ${pinned} hot tab${pinned === 1 ? "" : "s"}`, false);
+    }
+  );
 }
 
 function wireSettings() {
@@ -1681,6 +1879,7 @@ wireSuspendIdle().catch((err) => console.warn(LOG, "wireSuspendIdle failed:", er
 wireCopyColdUrls().catch((err) => console.warn(LOG, "wireCopyColdUrls failed:", err));
 wireExport().catch((err) => console.warn(LOG, "wireExport failed:", err));
 wireImport().catch((err) => console.warn(LOG, "wireImport failed:", err));
+wireQuickChips().catch((err) => console.warn(LOG, "wireQuickChips failed:", err));
 wireJumpHottest();
 wireSearch();
 wireBulkSelect();
@@ -2184,4 +2383,4 @@ async function wireGroupFilter() {
 }
 
 // Expose for unit-style smoke tests in a non-extension runtime.
-export { buildRows, recencyScore, frequencyScore, heatColor, groupRowsByHost, buildSnapshot, parseSnapshot, rowMatchesFilter, normalizeQuery, sortRows, sortGroups, formatRelativeTime, formatAbsoluteTime, formatCompactAge, formatAbsoluteAgo, bucketizeActivity, sparkPath, renderSparkSVG, computeHeatTrend, renderTrendSVG, buildHeatHistogram, HIST_BUCKETS, applyGroupFilter, tabGroupColorCss, collectColdTabs, writeClipboardText };
+export { buildRows, recencyScore, frequencyScore, heatColor, groupRowsByHost, buildSnapshot, parseSnapshot, rowMatchesFilter, normalizeQuery, sortRows, sortGroups, formatRelativeTime, formatAbsoluteTime, formatCompactAge, formatAbsoluteAgo, bucketizeActivity, sparkPath, renderSparkSVG, computeHeatTrend, renderTrendSVG, buildHeatHistogram, HIST_BUCKETS, applyGroupFilter, tabGroupColorCss, collectColdTabs, writeClipboardText, countColdCandidates, countPinHotCandidates };
