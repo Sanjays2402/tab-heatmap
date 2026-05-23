@@ -1,0 +1,12 @@
+{
+  "name": "tab-heatmap",
+  "version": "0.1.0",
+  "description": "Color-coded tab bar by recency and use frequency. Fade cold tabs, glow hot ones, close stale tabs in one click.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "echo 'no-op'",
+    "test": "node scripts/smoke.mjs",
+    "build": "echo 'no-op'"
+  }
+}
