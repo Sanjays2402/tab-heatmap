@@ -28,6 +28,9 @@ const DEFAULT_SETTINGS = Object.freeze({
   // Per-domain override map: { "github.com": 240, "news.ycombinator.com": 5 }
   // Each entry overrides recencyHalfLifeMinutes for tabs on that host.
   domainHalfLifeMinutes: {},
+  // Hosts that are NEVER eligible for cold-close, regardless of idle age.
+  // Stored as an array of normalized hostnames (e.g. "github.com").
+  coldWhitelist: [],
   // UI theme: "auto" follows OS prefers-color-scheme; "light"/"dark" force.
   theme: "auto",
 });
@@ -38,6 +41,19 @@ const VALID_THEMES = new Set(["auto", "light", "dark"]);
 function normalizeHost(h) {
   if (typeof h !== "string") return "";
   return h.trim().toLowerCase().replace(/^www\./, "").replace(/\/+$/, "");
+}
+
+/** Sanitize an array/object of hostnames → deduped sorted array of normalized hosts. */
+function sanitizeHostList(raw) {
+  const seen = new Set();
+  const src = Array.isArray(raw) ? raw : (raw && typeof raw === "object" ? Object.keys(raw) : []);
+  for (const v of src) {
+    const host = normalizeHost(v);
+    if (!host) continue;
+    if (!/^[a-z0-9.-]+\.[a-z]{2,}$|^localhost$/.test(host)) continue;
+    seen.add(host);
+  }
+  return [...seen].sort();
 }
 
 /** Sanitize a domain → minutes map; drops invalid entries, clamps values. */
@@ -68,6 +84,7 @@ async function readSettings() {
     const r = Number(merged.recencyHalfLifeMinutes);
     merged.recencyHalfLifeMinutes = Number.isFinite(r) && r >= 1 ? Math.min(1440, Math.max(1, r)) : DEFAULT_SETTINGS.recencyHalfLifeMinutes;
     merged.domainHalfLifeMinutes = sanitizeDomainMap(merged.domainHalfLifeMinutes);
+    merged.coldWhitelist = sanitizeHostList(merged.coldWhitelist);
     merged.theme = VALID_THEMES.has(merged.theme) ? merged.theme : DEFAULT_SETTINGS.theme;
     return merged;
   } catch (err) {
@@ -100,17 +117,36 @@ function effectiveStamp(tab, accessedMap) {
   return 0;
 }
 
+/** Extract a normalized hostname from a tab url, or "" if it can't be parsed. */
+function hostOfTab(tab) {
+  if (!tab || typeof tab.url !== "string" || !tab.url) return "";
+  try { return normalizeHost(new URL(tab.url).hostname); } catch { return ""; }
+}
+
+/** True if `host` is matched by the whitelist. Matches on exact host or any
+ *  parent-domain suffix, so "github.com" protects "gist.github.com" too. */
+function isHostWhitelisted(host, whitelist) {
+  if (!host || !Array.isArray(whitelist) || whitelist.length === 0) return false;
+  for (const w of whitelist) {
+    if (!w) continue;
+    if (host === w) return true;
+    if (host.endsWith("." + w)) return true;
+  }
+  return false;
+}
+
 /**
  * Pure predicate: is this tab a valid candidate for the cold-close sweep?
  * Pinned tabs are NEVER candidates — that invariant is enforced here AND
  * re-checked immediately before chrome.tabs.remove to close the race where
  * a user pins a tab between scan and reap.
  */
-function isColdCloseCandidate(tab, accessedMap, nowMs, thresholdMs) {
+function isColdCloseCandidate(tab, accessedMap, nowMs, thresholdMs, whitelist) {
   if (!tab || typeof tab.id !== "number") return false;
   if (tab.pinned === true) return false; // hard invariant — pinned is sacred.
   if (tab.active === true) return false;
   if (tab.audible === true) return false;
+  if (isHostWhitelisted(hostOfTab(tab), whitelist)) return false;
   const stamp = effectiveStamp(tab, accessedMap);
   // If we genuinely have no signal (stamp 0), don't reap — safer default.
   if (stamp <= 0) return false;
@@ -134,16 +170,20 @@ async function closeIdleTabs(days) {
   }
   const thresholdMs = d * 24 * 60 * 60 * 1000;
   const now = Date.now();
-  const [tabs, accessed] = await Promise.all([
+  const [tabs, accessed, settings] = await Promise.all([
     chrome.tabs.query({}),
     readLastAccessed(),
+    readSettings(),
   ]);
+  const whitelist = sanitizeHostList(settings.coldWhitelist);
   const candidates = [];
+  let skippedWhitelist = 0;
   for (const t of tabs) {
-    if (isColdCloseCandidate(t, accessed, now, thresholdMs)) candidates.push(t.id);
+    if (isColdCloseCandidate(t, accessed, now, thresholdMs, whitelist)) candidates.push(t.id);
+    else if (isHostWhitelisted(hostOfTab(t), whitelist) && t.pinned !== true && t.active !== true) skippedWhitelist++;
   }
   if (candidates.length === 0) {
-    return { ok: true, closed: 0, candidates: 0, scanned: tabs.length, skippedPinned: 0, days: d };
+    return { ok: true, closed: 0, candidates: 0, scanned: tabs.length, skippedPinned: 0, skippedWhitelist, days: d };
   }
   // Race-safe second pass: re-fetch each candidate by id and drop anything
   // that was pinned (or vanished) between the scan and now. This makes the
@@ -155,22 +195,25 @@ async function closeIdleTabs(days) {
       const fresh = await chrome.tabs.get(id);
       if (!fresh) return;
       if (fresh.pinned === true) { skippedPinned++; return; }
+      // Re-verify whitelist post-scan: a URL change mid-flight could land the
+      // tab on a protected host. Treat that the same as pinned — never close.
+      if (isHostWhitelisted(hostOfTab(fresh), whitelist)) { skippedWhitelist++; return; }
       verified.push(id);
     } catch {
       // tab gone — silently skip.
     }
   }));
   if (verified.length === 0) {
-    return { ok: true, closed: 0, candidates: candidates.length, scanned: tabs.length, skippedPinned, days: d };
+    return { ok: true, closed: 0, candidates: candidates.length, scanned: tabs.length, skippedPinned, skippedWhitelist, days: d };
   }
   try {
     await chrome.tabs.remove(verified);
     // Best-effort cleanup of our maps; onRemoved listeners will catch most cases too.
     await Promise.all(verified.map((id) => forgetTab(id)));
-    return { ok: true, closed: verified.length, candidates: candidates.length, scanned: tabs.length, skippedPinned, days: d };
+    return { ok: true, closed: verified.length, candidates: candidates.length, scanned: tabs.length, skippedPinned, skippedWhitelist, days: d };
   } catch (err) {
     console.warn(LOG_PREFIX, "closeIdleTabs remove failed:", err);
-    return { ok: false, error: String(err?.message || err), closed: 0, candidates: candidates.length, scanned: tabs.length, skippedPinned, days: d };
+    return { ok: false, error: String(err?.message || err), closed: 0, candidates: candidates.length, scanned: tabs.length, skippedPinned, skippedWhitelist, days: d };
   }
 }
 

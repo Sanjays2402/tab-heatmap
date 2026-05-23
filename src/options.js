@@ -13,6 +13,7 @@ const DEFAULTS = Object.freeze({
   hotThreshold: 0.5,
   recencyHalfLifeMinutes: 30,
   domainHalfLifeMinutes: {},
+  coldWhitelist: [],
   theme: "auto",
 });
 
@@ -120,6 +121,80 @@ function isValidHost(h) {
 
 /** In-memory edit copy of the per-domain map; persisted on save. */
 let domainMap = {};
+
+/** In-memory edit copy of the cold-close whitelist; persisted on save. */
+let whitelist = [];
+
+/** Sanitize + sort the whitelist before render/save. */
+function sanitizeWhitelist(arr) {
+  const seen = new Set();
+  const src = Array.isArray(arr) ? arr : [];
+  for (const v of src) {
+    const host = normalizeHost(v);
+    if (host && isValidHost(host)) seen.add(host);
+  }
+  return [...seen].sort();
+}
+
+function renderWhitelist() {
+  const list = document.getElementById("whitelist-list");
+  if (!list) return;
+  list.innerHTML = "";
+  if (whitelist.length === 0) {
+    const li = document.createElement("li");
+    li.className = "domain-empty";
+    li.textContent = "No protected hosts. Every domain is fair game for cold-close.";
+    list.appendChild(li);
+    return;
+  }
+  for (const host of whitelist) {
+    const li = document.createElement("li");
+    li.className = "domain-row whitelist-row";
+    li.innerHTML =
+      '<span class="domain-host"></span>' +
+      '<span class="whitelist-badge" aria-hidden="true">' +
+        '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' +
+          '<path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6l8-3z"/>' +
+          '<path d="M9 12l2 2 4-4"/>' +
+        '</svg>' +
+        '<span>protected</span>' +
+      '</span>' +
+      '<button type="button" class="btn btn-ghost domain-remove" aria-label="Remove from whitelist">' +
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+          '<path d="M6 6l12 12M18 6L6 18"/>' +
+        '</svg>' +
+      '</button>';
+    li.querySelector(".domain-host").textContent = host;
+    li.querySelector(".domain-remove").addEventListener("click", () => {
+      whitelist = whitelist.filter((h) => h !== host);
+      renderWhitelist();
+      markDirty();
+    });
+    list.appendChild(li);
+  }
+}
+
+function wireWhitelistAdd() {
+  const hostEl = document.getElementById("whitelist-host");
+  const addBtn = document.getElementById("whitelist-add-btn");
+  if (!hostEl || !addBtn) return;
+  const add = () => {
+    const host = normalizeHost(hostEl.value);
+    if (!host || !isValidHost(host)) {
+      setStatus("Enter a valid host (e.g. github.com)", "warn");
+      hostEl.focus();
+      return;
+    }
+    if (!whitelist.includes(host)) {
+      whitelist = sanitizeWhitelist([...whitelist, host]);
+      renderWhitelist();
+      markDirty();
+    }
+    hostEl.value = "";
+  };
+  addBtn.addEventListener("click", add);
+  hostEl.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); add(); } });
+}
 
 /** Current theme preference in the form ("auto"|"light"|"dark"). */
 let themePref = "auto";
@@ -260,6 +335,7 @@ function readForm() {
     hotThreshold: hot.get() / 100,
     recencyHalfLifeMinutes: half.get(),
     domainHalfLifeMinutes: { ...domainMap },
+    coldWhitelist: sanitizeWhitelist(whitelist),
     theme: VALID_THEMES.has(themePref) ? themePref : "auto",
   };
 }
@@ -271,21 +347,25 @@ function writeForm(s) {
   domainMap = (s.domainHalfLifeMinutes && typeof s.domainHalfLifeMinutes === "object")
     ? { ...s.domainHalfLifeMinutes }
     : {};
+  whitelist = sanitizeWhitelist(s.coldWhitelist);
   themePref = VALID_THEMES.has(s.theme) ? s.theme : "auto";
   applyTheme(themePref);
   renderThemeSeg();
   renderDomainList();
+  renderWhitelist();
 }
 
 function markDirty() {
   const cur = readForm();
   const sameDomain = JSON.stringify(cur.domainHalfLifeMinutes) === JSON.stringify(initial.domainHalfLifeMinutes || {});
+  const sameWhitelist = JSON.stringify(cur.coldWhitelist) === JSON.stringify(sanitizeWhitelist(initial.coldWhitelist));
   const changed =
     cur.idleCloseDays !== initial.idleCloseDays ||
     cur.hotThreshold !== initial.hotThreshold ||
     cur.recencyHalfLifeMinutes !== initial.recencyHalfLifeMinutes ||
     cur.theme !== (initial.theme || "auto") ||
-    !sameDomain;
+    !sameDomain ||
+    !sameWhitelist;
   setStatus(changed ? "Unsaved changes" : "", changed ? "warn" : "");
 }
 
@@ -297,6 +377,7 @@ async function load() {
     hotThreshold: clamp(s.hotThreshold, 0.05, 0.95, DEFAULTS.hotThreshold),
     recencyHalfLifeMinutes: clamp(s.recencyHalfLifeMinutes, LIMITS.recencyHalfLifeMinutes.min, LIMITS.recencyHalfLifeMinutes.max, DEFAULTS.recencyHalfLifeMinutes),
     domainHalfLifeMinutes: (s.domainHalfLifeMinutes && typeof s.domainHalfLifeMinutes === "object") ? { ...s.domainHalfLifeMinutes } : {},
+    coldWhitelist: sanitizeWhitelist(s.coldWhitelist),
     theme: VALID_THEMES.has(s.theme) ? s.theme : DEFAULTS.theme,
   };
   writeForm(initial);
@@ -315,6 +396,7 @@ async function save() {
       hotThreshold: resp.settings.hotThreshold,
       recencyHalfLifeMinutes: resp.settings.recencyHalfLifeMinutes,
       domainHalfLifeMinutes: { ...(resp.settings.domainHalfLifeMinutes || {}) },
+      coldWhitelist: sanitizeWhitelist(resp.settings.coldWhitelist),
       theme: VALID_THEMES.has(resp.settings.theme) ? resp.settings.theme : DEFAULTS.theme,
     };
     writeForm(initial);
@@ -333,9 +415,10 @@ function resetDefaults() {
 els.save?.addEventListener("click", () => { save().catch((err) => { console.warn(LOG, err); setStatus("Save failed", "warn"); }); });
 els.reset?.addEventListener("click", resetDefaults);
 wireDomainAdd();
+wireWhitelistAdd();
 wireThemeSeg();
 
 load().catch((err) => { console.warn(LOG, "load failed:", err); setStatus("Failed to load settings", "warn"); });
 
 // Exposed for smoke testing in non-extension runtimes.
-export { clamp, readForm, writeForm, DEFAULTS, LIMITS, normalizeHost, isValidHost, VALID_THEMES };
+export { clamp, readForm, writeForm, DEFAULTS, LIMITS, normalizeHost, isValidHost, VALID_THEMES, sanitizeWhitelist };

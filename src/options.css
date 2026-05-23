@@ -355,3 +355,19 @@ input[type="range"]::-moz-range-thumb {
   border-color: var(--ring);
 }
 .domain-add input[type="number"] { width: 78px; }
+
+.whitelist-row { border-color: color-mix(in oklab, var(--accent) 25%, var(--line)); }
+.whitelist-row:hover { border-color: color-mix(in oklab, var(--accent) 50%, var(--line)); }
+.whitelist-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  letter-spacing: 0.01em;
+  color: color-mix(in oklab, var(--accent) 75%, var(--fg));
+  background: color-mix(in oklab, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in oklab, var(--accent) 30%, var(--line));
+}
+.whitelist-badge svg { display: block; }
