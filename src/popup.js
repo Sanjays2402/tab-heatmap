@@ -283,6 +283,63 @@ function formatAbsoluteTime(stamp) {
   try { return new Date(stamp).toLocaleString(); } catch { return ""; }
 }
 
+// Heat histogram geometry. Buckets cover [0,1] heat range with one slot per bin.
+const HIST_BUCKETS = 12;
+
+/**
+ * Bucketize a list of row heat scores in [0,1] into `HIST_BUCKETS` bins.
+ * Returns { counts: number[HIST_BUCKETS], max, total, hot, cold, hotThreshold }.
+ * `cold` is the count of rows with heat < 0.2 — that's the cold-close pool.
+ */
+function buildHeatHistogram(rows, hotThreshold) {
+  const counts = new Array(HIST_BUCKETS).fill(0);
+  let hot = 0, cold = 0;
+  const cutHot = Number.isFinite(hotThreshold) ? hotThreshold : 0.5;
+  for (const r of rows) {
+    const h = Math.max(0, Math.min(1, Number.isFinite(r.heat) ? r.heat : 0));
+    let idx = Math.floor(h * HIST_BUCKETS);
+    if (idx >= HIST_BUCKETS) idx = HIST_BUCKETS - 1;
+    counts[idx]++;
+    if (h >= cutHot) hot++;
+    if (h < 0.2) cold++;
+  }
+  const max = counts.reduce((m, v) => v > m ? v : m, 0);
+  return { counts, max, total: rows.length, hot, cold, hotThreshold: cutHot };
+}
+
+/** Render the heat histogram into the popup; hidden when no tabs. */
+function renderHeatHistogram(rows) {
+  const wrap = document.getElementById("heat-histogram");
+  const bars = document.getElementById("hh-bars");
+  const meta = document.getElementById("hh-meta");
+  if (!wrap || !bars) return;
+  if (!rows || rows.length === 0) {
+    wrap.classList.add("hidden");
+    return;
+  }
+  const hist = buildHeatHistogram(rows, HOT_THRESHOLD);
+  wrap.classList.remove("hidden");
+  bars.innerHTML = "";
+  const frag = document.createDocumentFragment();
+  for (let i = 0; i < hist.counts.length; i++) {
+    const c = hist.counts[i];
+    const mid = (i + 0.5) / HIST_BUCKETS;
+    const color = heatColor(mid);
+    const pct = hist.max > 0 ? (c / hist.max) * 100 : 0;
+    const bar = document.createElement("span");
+    bar.className = "hh-bar" + (c === 0 ? " hh-bar--empty" : "");
+    bar.style.setProperty("--bar-h", `${Math.max(c === 0 ? 3 : 8, pct)}%`);
+    bar.style.setProperty("--bar-color", color);
+    bar.title = `${c} tab${c === 1 ? "" : "s"} (heat ${Math.round(i * 100 / HIST_BUCKETS)}–${Math.round((i + 1) * 100 / HIST_BUCKETS)})`;
+    bar.setAttribute("aria-label", bar.title);
+    frag.appendChild(bar);
+  }
+  bars.appendChild(frag);
+  if (meta) {
+    meta.textContent = `${hist.total} tabs • ${hist.hot} hot • ${hist.cold} cold`;
+  }
+}
+
 // Sparkline geometry. 24 hourly buckets covering the last 24h.
 const SPARK_BUCKETS = 24;
 const SPARK_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -719,6 +776,7 @@ async function render() {
   const rows = buildRows(tabs, accessedResp.map || {}, countsResp.map || {}, sparkResp?.map || {});
   const sortedAll = sortRows(rows, SORT_MODE);
   const allRows = sortedAll;
+  renderHeatHistogram(allRows);
   const q = FILTER_QUERY;
   const filtered = q ? sortedAll.filter((r) => rowMatchesFilter(r, q)) : sortedAll;
   const list = document.getElementById("tab-list");
@@ -1446,4 +1504,4 @@ async function closeTabsByIds(ids) {
 }
 
 // Expose for unit-style smoke tests in a non-extension runtime.
-export { buildRows, recencyScore, frequencyScore, heatColor, groupRowsByHost, buildSnapshot, parseSnapshot, rowMatchesFilter, normalizeQuery, sortRows, sortGroups, formatRelativeTime, formatAbsoluteTime, bucketizeActivity, sparkPath, renderSparkSVG };
+export { buildRows, recencyScore, frequencyScore, heatColor, groupRowsByHost, buildSnapshot, parseSnapshot, rowMatchesFilter, normalizeQuery, sortRows, sortGroups, formatRelativeTime, formatAbsoluteTime, bucketizeActivity, sparkPath, renderSparkSVG, buildHeatHistogram, HIST_BUCKETS };

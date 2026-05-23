@@ -27,3 +27,13 @@ This file is the agent's task queue. Unchecked items get implemented in order. W
 - [x] Badge on extension icon showing count of cold tabs
 - [x] Context menu: 'Mark tab as hot' to boost heat manually
 - [x] Audible/muted tab indicator in popup list
+- [x] Heat histogram chart for whole window (distribution of cold→hot)
+- [ ] Suspend cold tabs (discard via chrome.tabs.discard) instead of closing
+- [ ] Undo last close action with toast notification
+- [ ] Tab age column showing time since tab was first opened
+- [ ] Group selector: filter popup by current tab group
+- [ ] Copy all cold tab URLs to clipboard before closing
+- [ ] Daily summary notification: 'X cold tabs ready to close'
+- [ ] Heat trend arrow (rising/falling) next to each tab
+- [ ] Quick-action chips in popup: Close Cold, Suspend Cold, Pin Hot
+- [ ] Per-window heat scoreboard in popup header
