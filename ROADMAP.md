@@ -20,7 +20,7 @@ This file is the agent's task queue. Unchecked items get implemented in order. W
 - [x] Search/filter tabs in popup by title or URL
 - [x] Sort tabs by heat, recency, frequency, or alphabetical
 - [x] Hover tooltip showing last-accessed time + activation count
-- [ ] Bulk-select tabs with checkboxes and close selected
+- [x] Bulk-select tabs with checkboxes and close selected
 - [ ] Heat-score sparkline (last 24h activity per tab)
 - [ ] Whitelist domains never to mark as cold
 - [ ] Settings: reset all heat data with confirmation

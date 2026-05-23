@@ -385,9 +385,10 @@ function wireRowTooltip(li, row) {
 /** Create a single tab row element. */
 function rowElement(row) {
   const li = document.createElement("li");
-  li.className = "tab-row" + (row.active ? " active" : "");
-  li.setAttribute("role", "button");
+  li.className = "tab-row" + (row.active ? " active" : "") + (SELECT_MODE ? " is-selectable" : "") + (SELECT_MODE && SELECTED.has(row.id) ? " is-selected" : "");
+  li.setAttribute("role", SELECT_MODE ? "checkbox" : "button");
   li.setAttribute("tabindex", "0");
+  if (SELECT_MODE) li.setAttribute("aria-checked", SELECTED.has(row.id) ? "true" : "false");
   li.dataset.tabId = String(row.id);
   // Native title is suppressed in favor of the custom hover tooltip; keep
   // a screen-reader label so the row still announces context.
@@ -409,7 +410,17 @@ function rowElement(row) {
   // Color gradient: cold blue → warm amber → hot red.
   const heatRGB = heatColor(row.heat);
 
+  const checkboxHTML = SELECT_MODE
+    ? (
+      '<span class="tab-check" aria-hidden="true">' +
+        '<svg class="tab-check-mark" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+          '<path d="M5 12.5l4.5 4.5L19 7.5"/>' +
+        '</svg>' +
+      '</span>'
+    )
+    : "";
   li.innerHTML =
+    checkboxHTML +
     faviconHTML +
     '<div class="tab-main">' +
       `<div class="tab-title"></div>` +
@@ -429,11 +440,23 @@ function rowElement(row) {
   }
 
   const activate = () => focusTab(row.id, row.windowId);
-  li.addEventListener("click", activate);
-  li.addEventListener("keydown", (ev) => {
-    if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); activate(); }
+  const toggleSelect = () => {
+    if (SELECTED.has(row.id)) SELECTED.delete(row.id); else SELECTED.add(row.id);
+    li.classList.toggle("is-selected", SELECTED.has(row.id));
+    li.setAttribute("aria-checked", SELECTED.has(row.id) ? "true" : "false");
+    updateSelectionUI();
+  };
+  li.addEventListener("click", (ev) => {
+    if (SELECT_MODE) { ev.preventDefault(); toggleSelect(); }
+    else activate();
   });
-  wireRowTooltip(li, row);
+  li.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" || ev.key === " ") {
+      ev.preventDefault();
+      if (SELECT_MODE) toggleSelect(); else activate();
+    }
+  });
+  if (!SELECT_MODE) wireRowTooltip(li, row);
 
   return li;
 }
@@ -1031,6 +1054,11 @@ function applyGroupToggleVisual(btn) {
 let GROUP_BY_HOST = false;
 let FILTER_QUERY = "";
 let SORT_MODE = "heat";
+let SELECT_MODE = false;
+/** @type {Set<number>} ids of tabs currently selected in bulk-select mode. */
+const SELECTED = new Set();
+let CLOSE_SELECTED_ARMED = false;
+let CLOSE_SELECTED_TIMER = 0;
 
 const VALID_SORT_MODES = new Set(["heat", "recency", "frequency", "alpha"]);
 
@@ -1099,9 +1127,183 @@ wireExport().catch((err) => console.warn(LOG, "wireExport failed:", err));
 wireImport().catch((err) => console.warn(LOG, "wireImport failed:", err));
 wireJumpHottest();
 wireSearch();
+wireBulkSelect();
 Promise.all([wireSort(), wireGroupToggle()])
   .then(() => render())
   .catch((err) => console.warn(LOG, "render failed:", err));
+
+/**
+ * Update the toolbar's selection-mode visuals — selected count pill, label,
+ * "All" button label (Select all ↔ Clear), and the close-selected button's
+ * disarmed state when the set changes.
+ */
+function updateSelectionUI() {
+  const pill = document.getElementById("selected-count-pill");
+  const closeBtn = document.getElementById("close-selected-btn");
+  const labelEl = closeBtn?.querySelector(".action-label");
+  const allBtn = document.getElementById("select-all-btn");
+  const status = document.getElementById("toolbar-status");
+  const n = SELECTED.size;
+  if (pill) pill.textContent = String(n);
+  if (closeBtn) {
+    closeBtn.classList.toggle("is-disabled", n === 0);
+    if (n === 0) closeBtn.setAttribute("disabled", "true");
+    else closeBtn.removeAttribute("disabled");
+  }
+  // Reset confirm state when the selection changes.
+  if (CLOSE_SELECTED_ARMED) {
+    CLOSE_SELECTED_ARMED = false;
+    if (CLOSE_SELECTED_TIMER) { clearTimeout(CLOSE_SELECTED_TIMER); CLOSE_SELECTED_TIMER = 0; }
+    if (closeBtn) closeBtn.classList.remove("is-confirming");
+    if (labelEl) labelEl.textContent = "Close selected";
+    if (status) { status.textContent = ""; status.classList.remove("is-warn"); }
+  }
+  if (allBtn) {
+    const allLabel = allBtn.querySelector(".action-label");
+    if (allLabel) allLabel.textContent = n > 0 ? "Clear" : "All";
+  }
+}
+
+/** Toggle bulk-select mode on/off; resets selection when leaving. */
+function setSelectMode(on) {
+  SELECT_MODE = !!on;
+  if (!SELECT_MODE) SELECTED.clear();
+  const toggleBtn = document.getElementById("select-toggle-btn");
+  const closeBtn = document.getElementById("close-selected-btn");
+  const allBtn = document.getElementById("select-all-btn");
+  if (toggleBtn) {
+    toggleBtn.setAttribute("aria-pressed", SELECT_MODE ? "true" : "false");
+    toggleBtn.classList.toggle("is-active", SELECT_MODE);
+    const lbl = toggleBtn.querySelector(".action-label");
+    if (lbl) lbl.textContent = SELECT_MODE ? "Done" : "Select";
+  }
+  if (closeBtn) closeBtn.classList.toggle("hidden", !SELECT_MODE);
+  if (allBtn) allBtn.classList.toggle("hidden", !SELECT_MODE);
+  const list = document.getElementById("tab-list");
+  if (list) list.classList.toggle("is-select-mode", SELECT_MODE);
+  updateSelectionUI();
+  // Hide any open hover tooltip — it's distracting in select mode.
+  hideTooltip(true);
+  render().catch((err) => console.warn(LOG, "select-mode re-render failed:", err));
+}
+
+/** Collect visible tab IDs from the currently rendered list. */
+function visibleTabIds() {
+  const ids = [];
+  const list = document.getElementById("tab-list");
+  if (!list) return ids;
+  for (const li of list.querySelectorAll(".tab-row")) {
+    const id = Number(li.dataset.tabId);
+    if (Number.isFinite(id)) ids.push(id);
+  }
+  return ids;
+}
+
+/**
+ * Wire the bulk-select toolbar: enter/exit mode, select-all/clear, and the
+ * two-step "Close selected" confirm pattern (mirrors the close-idle flow).
+ */
+function wireBulkSelect() {
+  const toggle = document.getElementById("select-toggle-btn");
+  const closeBtn = document.getElementById("close-selected-btn");
+  const allBtn = document.getElementById("select-all-btn");
+  const status = document.getElementById("toolbar-status");
+  const labelEl = closeBtn?.querySelector(".action-label");
+  if (!toggle || !closeBtn) return;
+
+  function setStatus(text, warn) {
+    if (!status) return;
+    status.textContent = text || "";
+    status.classList.toggle("is-warn", !!warn);
+  }
+
+  toggle.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    setSelectMode(!SELECT_MODE);
+  });
+
+  if (allBtn) {
+    allBtn.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      const ids = visibleTabIds();
+      // If everything visible is selected, clear; otherwise select all visible.
+      const allOn = ids.length > 0 && ids.every((id) => SELECTED.has(id));
+      if (allOn || SELECTED.size > 0 && !ids.some((id) => !SELECTED.has(id))) {
+        SELECTED.clear();
+      } else {
+        for (const id of ids) SELECTED.add(id);
+      }
+      // Reflect in the live DOM without a full re-render.
+      const list = document.getElementById("tab-list");
+      if (list) {
+        for (const li of list.querySelectorAll(".tab-row")) {
+          const on = SELECTED.has(Number(li.dataset.tabId));
+          li.classList.toggle("is-selected", on);
+          li.setAttribute("aria-checked", on ? "true" : "false");
+        }
+      }
+      updateSelectionUI();
+    });
+  }
+
+  function disarm() {
+    CLOSE_SELECTED_ARMED = false;
+    closeBtn.classList.remove("is-confirming");
+    if (labelEl) labelEl.textContent = "Close selected";
+    if (CLOSE_SELECTED_TIMER) { clearTimeout(CLOSE_SELECTED_TIMER); CLOSE_SELECTED_TIMER = 0; }
+  }
+
+  closeBtn.addEventListener("click", async (ev) => {
+    ev.preventDefault();
+    const n = SELECTED.size;
+    if (n === 0) {
+      setStatus("Select tabs first", true);
+      return;
+    }
+    if (!CLOSE_SELECTED_ARMED) {
+      CLOSE_SELECTED_ARMED = true;
+      closeBtn.classList.add("is-confirming");
+      if (labelEl) labelEl.textContent = `Close ${n} tab${n === 1 ? "" : "s"}?`;
+      setStatus("Click again to confirm", true);
+      CLOSE_SELECTED_TIMER = setTimeout(disarm, 4000);
+      return;
+    }
+    closeBtn.setAttribute("disabled", "true");
+    setStatus("Closing…", false);
+    const ids = Array.from(SELECTED);
+    const closed = await closeTabsByIds(ids);
+    disarm();
+    SELECTED.clear();
+    closeBtn.removeAttribute("disabled");
+    setStatus(closed === 0 ? "Nothing closed" : `Closed ${closed} tab${closed === 1 ? "" : "s"}`, false);
+    // Stay in select mode but with an empty selection so the user can keep going.
+    setTimeout(() => { render().catch(() => {}); }, 150);
+  });
+}
+
+/** Close a list of tab IDs via chrome.tabs.remove. Returns the count closed. */
+async function closeTabsByIds(ids) {
+  const clean = (Array.isArray(ids) ? ids : []).filter((n) => Number.isFinite(n));
+  if (clean.length === 0) return 0;
+  try {
+    await new Promise((resolve) => {
+      try {
+        chrome.tabs.remove(clean, () => {
+          // Swallow lastError — a tab may have closed between selection and removal.
+          if (chrome.runtime.lastError) console.warn(LOG, "tabs.remove:", chrome.runtime.lastError.message);
+          resolve();
+        });
+      } catch (err) {
+        console.warn(LOG, "tabs.remove threw:", err);
+        resolve();
+      }
+    });
+    return clean.length;
+  } catch (err) {
+    console.warn(LOG, "closeTabsByIds failed:", err);
+    return 0;
+  }
+}
 
 // Expose for unit-style smoke tests in a non-extension runtime.
 export { buildRows, recencyScore, frequencyScore, heatColor, groupRowsByHost, buildSnapshot, parseSnapshot, rowMatchesFilter, normalizeQuery, sortRows, sortGroups, formatRelativeTime, formatAbsoluteTime };
