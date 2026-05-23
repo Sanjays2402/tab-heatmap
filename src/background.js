@@ -20,6 +20,8 @@ const MSG = Object.freeze({
 const SETTINGS_KEY = "th:settings";
 const DEFAULT_SETTINGS = Object.freeze({
   idleCloseDays: 7, // Close tabs untouched for this many days when user triggers close-idle.
+  hotThreshold: 0.5, // Heat score (0..1) at which a tab counts as "hot" in popup stats.
+  recencyHalfLifeMinutes: 30, // Half-life for recency decay used by the popup heat score.
 });
 
 async function readSettings() {
@@ -30,6 +32,10 @@ async function readSettings() {
     // Clamp to a sane range so the UI can't get into a bricked state.
     const d = Number(merged.idleCloseDays);
     merged.idleCloseDays = Number.isFinite(d) && d >= 1 ? Math.min(365, Math.max(1, d)) : DEFAULT_SETTINGS.idleCloseDays;
+    const h = Number(merged.hotThreshold);
+    merged.hotThreshold = Number.isFinite(h) ? Math.min(0.95, Math.max(0.05, h)) : DEFAULT_SETTINGS.hotThreshold;
+    const r = Number(merged.recencyHalfLifeMinutes);
+    merged.recencyHalfLifeMinutes = Number.isFinite(r) && r >= 1 ? Math.min(1440, Math.max(1, r)) : DEFAULT_SETTINGS.recencyHalfLifeMinutes;
     return merged;
   } catch (err) {
     console.warn(LOG_PREFIX, "readSettings failed:", err);

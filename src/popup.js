@@ -10,11 +10,18 @@ const MSG = Object.freeze({
   GET_SETTINGS: "th:getSettings",
 });
 
-// Recency half-life: a tab cools to 0.5 heat after this many ms since last access.
-const RECENCY_HALF_LIFE_MS = 30 * 60 * 1000; // 30 minutes
+// Recency half-life default: a tab cools to 0.5 heat after this many ms since last access.
+// Effective value comes from user settings (recencyHalfLifeMinutes); this is just the fallback.
+const DEFAULT_RECENCY_HALF_LIFE_MS = 30 * 60 * 1000; // 30 minutes
 // Recency contribution to the overall heat score.
 const RECENCY_WEIGHT = 0.6;
 const FREQUENCY_WEIGHT = 0.4;
+// Default "hot" cutoff used for the footer stat; user-configurable via the options page.
+const DEFAULT_HOT_THRESHOLD = 0.5;
+
+// Mutable runtime configuration, hydrated from settings on render.
+let RECENCY_HALF_LIFE_MS = DEFAULT_RECENCY_HALF_LIFE_MS;
+let HOT_THRESHOLD = DEFAULT_HOT_THRESHOLD;
 
 /** Detect prefers-color-scheme and set body theme accordingly. */
 function applyTheme() {
@@ -212,6 +219,16 @@ async function render() {
     sendMessage(MSG.GET_ACTIVATION_COUNTS),
   ]);
 
+  // Hydrate user-configurable thresholds from background settings.
+  const settingsResp = await sendMessage(MSG.GET_SETTINGS);
+  const settings = (settingsResp && settingsResp.settings) || {};
+  if (Number.isFinite(settings.recencyHalfLifeMinutes) && settings.recencyHalfLifeMinutes > 0) {
+    RECENCY_HALF_LIFE_MS = settings.recencyHalfLifeMinutes * 60 * 1000;
+  }
+  if (Number.isFinite(settings.hotThreshold)) {
+    HOT_THRESHOLD = Math.min(0.95, Math.max(0.05, settings.hotThreshold));
+  }
+
   const rows = buildRows(tabs, accessedResp.map || {}, countsResp.map || {});
   const list = document.getElementById("tab-list");
   const empty = document.getElementById("empty-state");
@@ -232,7 +249,7 @@ async function render() {
   list.appendChild(frag);
 
   if (stat) {
-    const hot = rows.filter((r) => r.heat >= 0.5).length;
+    const hot = rows.filter((r) => r.heat >= HOT_THRESHOLD).length;
     stat.textContent = `${rows.length} tabs • ${hot} hot`;
   }
 }
