@@ -14,6 +14,7 @@ const MSG = Object.freeze({
   MARK_HOT: "th:markHot",
   GET_ACTIVATION_COUNTS: "th:getActivationCounts",
   GET_ACTIVITY_SPARK: "th:getActivitySpark",
+  GET_FIRST_OPENED: "th:getFirstOpened",
   CLOSE_IDLE: "th:closeIdle",
   SUSPEND_IDLE: "th:suspendIdle",
   GET_SETTINGS: "th:getSettings",
@@ -310,6 +311,8 @@ async function suspendIdleTabs(days) {
   return { ok: true, suspended, candidates: candidates.length, scanned: tabs.length, skippedPinned, skippedWhitelist, skippedAlready, days: d };
 }
 
+/** Storage key namespace for per-tab first-opened map. */
+const FIRST_OPENED_KEY = "th:firstOpened";
 /** Storage key namespace for per-tab last-accessed map. */
 const LAST_ACCESSED_KEY = "th:lastAccessed";
 /** Storage key namespace for per-tab activation-count map. */
@@ -320,6 +323,33 @@ const ACTIVITY_SPARK_KEY = "th:activitySpark";
 const SPARK_WINDOW_MS = 24 * 60 * 60 * 1000;
 /** Hard cap per-tab to bound storage even on hyperactive tabs. */
 const SPARK_MAX_SAMPLES = 240;
+
+/** Read the persisted first-opened map. Returns {} if uninitialized. */
+async function readFirstOpened() {
+  try {
+    const out = await chrome.storage.session.get(FIRST_OPENED_KEY);
+    const map = out?.[FIRST_OPENED_KEY];
+    return (map && typeof map === "object") ? map : {};
+  } catch (err) {
+    console.warn(LOG_PREFIX, "readFirstOpened failed:", err);
+    return {};
+  }
+}
+
+/** Record the first-opened timestamp for a tab; never overwrites an
+ *  existing entry so re-stamps from late onCreated events stay idempotent. */
+async function recordFirstOpened(tabId, ts = Date.now()) {
+  if (typeof tabId !== "number" || tabId < 0) return;
+  try {
+    const map = await readFirstOpened();
+    const key = String(tabId);
+    if (typeof map[key] === "number" && map[key] > 0) return;
+    map[key] = ts;
+    await chrome.storage.session.set({ [FIRST_OPENED_KEY]: map });
+  } catch (err) {
+    console.warn(LOG_PREFIX, "recordFirstOpened failed:", err);
+  }
+}
 
 /** Read the persisted last-accessed map. Returns {} if uninitialized. */
 async function readLastAccessed() {
@@ -459,20 +489,23 @@ async function markTabHot(tabId, ts = Date.now()) {
 async function forgetTab(tabId) {
   try {
     const key = String(tabId);
-    const [accessed, counts, spark] = await Promise.all([
+    const [accessed, counts, spark, opened] = await Promise.all([
       readLastAccessed(),
       readActivationCounts(),
       readActivitySpark(),
+      readFirstOpened(),
     ]);
-    let dirtyA = false, dirtyC = false, dirtyS = false;
+    let dirtyA = false, dirtyC = false, dirtyS = false, dirtyO = false;
     if (key in accessed) { delete accessed[key]; dirtyA = true; }
     if (key in counts) { delete counts[key]; dirtyC = true; }
     if (key in spark) { delete spark[key]; dirtyS = true; }
+    if (key in opened) { delete opened[key]; dirtyO = true; }
     const writes = {};
     if (dirtyA) writes[LAST_ACCESSED_KEY] = accessed;
     if (dirtyC) writes[ACTIVATION_COUNT_KEY] = counts;
     if (dirtyS) writes[ACTIVITY_SPARK_KEY] = spark;
-    if (dirtyA || dirtyC || dirtyS) await chrome.storage.session.set(writes);
+    if (dirtyO) writes[FIRST_OPENED_KEY] = opened;
+    if (dirtyA || dirtyC || dirtyS || dirtyO) await chrome.storage.session.set(writes);
   } catch (err) {
     console.warn(LOG_PREFIX, "forgetTab failed:", err);
   }
@@ -553,16 +586,37 @@ async function seedFromOpenTabs() {
     if (!chrome?.tabs?.query) return;
     const tabs = await chrome.tabs.query({});
     const now = Date.now();
-    const map = await readLastAccessed();
+    const [accessed, opened] = await Promise.all([
+      readLastAccessed(),
+      readFirstOpened(),
+    ]);
     for (const t of tabs) {
-      if (typeof t.id === "number" && !(String(t.id) in map)) {
-        map[String(t.id)] = typeof t.lastAccessed === "number" ? t.lastAccessed : now;
+      if (typeof t.id !== "number") continue;
+      const key = String(t.id);
+      if (!(key in accessed)) {
+        accessed[key] = typeof t.lastAccessed === "number" ? t.lastAccessed : now;
+      }
+      // First-opened is unknown for pre-existing tabs at SW boot; best we can
+      // do is anchor to lastAccessed (or now) so the column shows *something*
+      // sensible rather than "unknown". Real onCreated events take precedence.
+      if (!(key in opened)) {
+        opened[key] = typeof t.lastAccessed === "number" ? t.lastAccessed : now;
       }
     }
-    await chrome.storage.session.set({ [LAST_ACCESSED_KEY]: map });
+    await chrome.storage.session.set({
+      [LAST_ACCESSED_KEY]: accessed,
+      [FIRST_OPENED_KEY]: opened,
+    });
   } catch (err) {
     console.warn(LOG_PREFIX, "seedFromOpenTabs failed:", err);
   }
+}
+
+// Stamp a tab's first-opened timestamp when it's created.
+if (chrome?.tabs?.onCreated) {
+  chrome.tabs.onCreated.addListener((tab) => {
+    if (typeof tab?.id === "number") recordFirstOpened(tab.id);
+  });
 }
 
 // Track activations as the canonical "accessed" signal and bump the counter.
@@ -643,6 +697,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     readActivitySpark().then((map) => sendResponse({ ok: true, map, windowMs: SPARK_WINDOW_MS }));
     return true;
   }
+  if (msg.type === MSG.GET_FIRST_OPENED) {
+    readFirstOpened().then((map) => sendResponse({ ok: true, map }));
+    return true;
+  }
   if (msg.type === MSG.GET_SETTINGS) {
     readSettings().then((settings) => sendResponse({ ok: true, settings }));
     return true;
@@ -690,6 +748,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           LAST_ACCESSED_KEY,
           ACTIVATION_COUNT_KEY,
           ACTIVITY_SPARK_KEY,
+          FIRST_OPENED_KEY,
         ]);
         // Reseed from currently-open tabs so the popup doesn't render an
         // empty list — every tab starts fresh from "now".

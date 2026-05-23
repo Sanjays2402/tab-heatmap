@@ -358,6 +358,31 @@ body {
   text-overflow: ellipsis;
 }
 
+.tab-age {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 18px;
+  padding: 0 6px;
+  margin-right: 6px;
+  border-radius: 999px;
+  background: var(--glass);
+  border: 1px solid var(--line);
+  box-shadow: var(--glass-rim);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.005em;
+  color: var(--fg-dim);
+  flex: 0 0 auto;
+  white-space: nowrap;
+  transition: color 180ms var(--ease), border-color 180ms var(--ease), background 180ms var(--ease);
+}
+.tab-age svg { opacity: 0.7; }
+.tab-row:hover .tab-age { color: var(--fg); border-color: color-mix(in oklab, var(--accent) 18%, var(--line)); }
+.tab-age--unknown { opacity: 0.55; }
+.tab-list.is-select-mode .tab-age { display: none; }
+.tab-group .tab-age { margin-right: 4px; }
+
 .tab-spark {
   display: inline-flex;
   align-items: center;

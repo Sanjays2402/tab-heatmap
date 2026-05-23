@@ -75,3 +75,22 @@ if (!/wireSuspendIdle/.test(popupJs) || !/th:suspendIdle/.test(popupJs)) {
   process.exit(1);
 }
 
+// Tab age column: SW must track first-opened, popup must surface it.
+if (!/th:firstOpened\b/.test(bg) || !/recordFirstOpened/.test(bg)) {
+  console.error("background.js must track first-opened timestamps per tab");
+  process.exit(1);
+}
+if (!/th:getFirstOpened/.test(bg) || !/th:getFirstOpened/.test(popupJs)) {
+  console.error("first-opened map must be exposed to the popup");
+  process.exit(1);
+}
+if (!/tab-age/.test(popupJs)) {
+  console.error("popup.js must render the tab-age column");
+  process.exit(1);
+}
+const popupCss = fs.readFileSync("src/popup.css", "utf8");
+if (!/\.tab-age\b/.test(popupCss)) {
+  console.error("popup.css must style .tab-age");
+  process.exit(1);
+}
+

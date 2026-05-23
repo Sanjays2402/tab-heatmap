@@ -30,7 +30,7 @@ This file is the agent's task queue. Unchecked items get implemented in order. W
 - [x] Heat histogram chart for whole window (distribution of cold→hot)
 - [x] Suspend cold tabs (discard via chrome.tabs.discard) instead of closing
 - [x] Undo last close action with toast notification
-- [ ] Tab age column showing time since tab was first opened
+- [x] Tab age column showing time since tab was first opened
 - [ ] Group selector: filter popup by current tab group
 - [ ] Copy all cold tab URLs to clipboard before closing
 - [ ] Daily summary notification: 'X cold tabs ready to close'

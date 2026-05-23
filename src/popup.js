@@ -7,6 +7,8 @@ const MSG = Object.freeze({
   GET_LAST_ACCESSED: "th:getLastAccessed",
   JUMP_HOTTEST: "th:jumpHottest",
   GET_ACTIVATION_COUNTS: "th:getActivationCounts",
+  GET_ACTIVITY_SPARK: "th:getActivitySpark",
+  GET_FIRST_OPENED: "th:getFirstOpened",
   CLOSE_IDLE: "th:closeIdle",
   SUSPEND_IDLE: "th:suspendIdle",
   GET_SETTINGS: "th:getSettings",
@@ -124,7 +126,7 @@ function frequencyScore(count, maxCount) {
 }
 
 /** Compose a tab "row model" used for rendering and sorting. */
-function buildRows(tabs, accessedMap, countsMap, sparkMap) {
+function buildRows(tabs, accessedMap, countsMap, sparkMap, openedMap) {
   const now = Date.now();
   const maxCount = Object.values(countsMap || {})
     .reduce((m, v) => (typeof v === "number" && v > m ? v : m), 0);
@@ -140,6 +142,7 @@ function buildRows(tabs, accessedMap, countsMap, sparkMap) {
     const f = frequencyScore(count, maxCount);
     const heat = RECENCY_WEIGHT * r + FREQUENCY_WEIGHT * f;
     const samples = Array.isArray(sparkMap?.[key]) ? sparkMap[key] : [];
+    const opened = typeof openedMap?.[key] === "number" ? openedMap[key] : 0;
     return {
       id: t.id,
       windowId: t.windowId,
@@ -151,6 +154,7 @@ function buildRows(tabs, accessedMap, countsMap, sparkMap) {
       audible: !!t.audible,
       muted: !!(t.mutedInfo && t.mutedInfo.muted),
       lastAccessed: stamp,
+      firstOpened: opened,
       activations: count,
       sparkSamples: samples,
       recency: r,
@@ -282,6 +286,48 @@ function formatRelativeTime(stamp, now) {
 function formatAbsoluteTime(stamp) {
   if (!Number.isFinite(stamp) || stamp <= 0) return "";
   try { return new Date(stamp).toLocaleString(); } catch { return ""; }
+}
+
+/**
+ * Compact, fixed-width-ish age label for the tab-age column. Picks the
+ * largest unit and rounds (e.g. "3m", "2h", "5d", "3w", "4mo", "1y").
+ * Sub-minute ages collapse to "<1m" so the column never reads as zero.
+ */
+function formatCompactAge(ms) {
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n < 0) return "—";
+  const s = Math.floor(n / 1000);
+  if (s < 60) return "<1m";
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h`;
+  const d = Math.floor(h / 24);
+  if (d < 7) return `${d}d`;
+  const w = Math.floor(d / 7);
+  if (w < 5) return `${w}w`;
+  const mo = Math.floor(d / 30);
+  if (mo < 12) return `${mo}mo`;
+  const y = Math.floor(d / 365);
+  return `${y}y`;
+}
+
+/** Verbose age label used in the tooltip (e.g. "3 days 4 hours"). */
+function formatAbsoluteAgo(ms) {
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n < 0) return "unknown";
+  const s = Math.floor(n / 1000);
+  if (s < 60) return `${s} second${s === 1 ? "" : "s"}`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} minute${m === 1 ? "" : "s"}`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h} hour${h === 1 ? "" : "s"}`;
+  const d = Math.floor(h / 24);
+  if (d < 60) return `${d} day${d === 1 ? "" : "s"}`;
+  const mo = Math.floor(d / 30);
+  if (mo < 24) return `${mo} month${mo === 1 ? "" : "s"}`;
+  const y = Math.floor(d / 365);
+  return `${y} year${y === 1 ? "" : "s"}`;
 }
 
 // Heat histogram geometry. Buckets cover [0,1] heat range with one slot per bin.
@@ -590,6 +636,18 @@ function rowElement(row) {
   const heatRGB = heatColor(row.heat);
 
   const audioHTML = renderAudioIndicator(row);
+  const ageMs = (Number.isFinite(row.firstOpened) && row.firstOpened > 0)
+    ? Math.max(0, Date.now() - row.firstOpened)
+    : -1;
+  const ageHTML = ageMs >= 0
+    ? `<span class="tab-age" title="Opened ${formatAbsoluteTime(row.firstOpened) || "unknown"} — ${formatAbsoluteAgo(ageMs)} ago" aria-label="Tab age ${formatAbsoluteAgo(ageMs)}">` +
+        '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>' +
+        `<span>${formatCompactAge(ageMs)}</span>` +
+      `</span>`
+    : `<span class="tab-age tab-age--unknown" title="Opened time unknown" aria-label="Tab age unknown">` +
+        '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>' +
+        '<span>—</span>' +
+      `</span>`;
   const checkboxHTML = SELECT_MODE
     ? (
       '<span class="tab-check" aria-hidden="true">' +
@@ -607,6 +665,7 @@ function rowElement(row) {
       `<div class="tab-sub"></div>` +
     '</div>' +
     audioHTML +
+    ageHTML +
     `<span class="tab-spark" style="color:${heatRGB}" title="Activity, last 24h (${(row.sparkSamples || []).length} samples)" aria-label="24h activity">${renderSparkSVG(row.sparkSamples, Date.now(), heatRGB)}</span>` +
     `<span class="heat-badge" style="--dot-opacity:${dotOpacity};--heat-color:${heatRGB}" title="Heat ${heatPct} — recency ${(row.recency*100).toFixed(0)}% • freq ${(row.frequency*100).toFixed(0)}%">` +
       '<span class="heat-dot"></span>' +
@@ -753,11 +812,12 @@ function appendGroup(parent, group, expanded) {
 
 /** Top-level render. */
 async function render() {
-  const [tabs, accessedResp, countsResp, sparkResp] = await Promise.all([
+  const [tabs, accessedResp, countsResp, sparkResp, openedResp] = await Promise.all([
     getAllTabs(),
     sendMessage(MSG.GET_LAST_ACCESSED),
     sendMessage(MSG.GET_ACTIVATION_COUNTS),
     sendMessage(MSG.GET_ACTIVITY_SPARK),
+    sendMessage(MSG.GET_FIRST_OPENED),
   ]);
 
   // Hydrate user-configurable thresholds from background settings.
@@ -774,7 +834,7 @@ async function render() {
     : {};
   applyTheme(settings.theme);
 
-  const rows = buildRows(tabs, accessedResp.map || {}, countsResp.map || {}, sparkResp?.map || {});
+  const rows = buildRows(tabs, accessedResp.map || {}, countsResp.map || {}, sparkResp?.map || {}, openedResp?.map || {});
   const sortedAll = sortRows(rows, SORT_MODE);
   const allRows = sortedAll;
   renderHeatHistogram(allRows);
@@ -1761,4 +1821,4 @@ async function undoLastClose() {
 }
 
 // Expose for unit-style smoke tests in a non-extension runtime.
-export { buildRows, recencyScore, frequencyScore, heatColor, groupRowsByHost, buildSnapshot, parseSnapshot, rowMatchesFilter, normalizeQuery, sortRows, sortGroups, formatRelativeTime, formatAbsoluteTime, bucketizeActivity, sparkPath, renderSparkSVG, buildHeatHistogram, HIST_BUCKETS };
+export { buildRows, recencyScore, frequencyScore, heatColor, groupRowsByHost, buildSnapshot, parseSnapshot, rowMatchesFilter, normalizeQuery, sortRows, sortGroups, formatRelativeTime, formatAbsoluteTime, formatCompactAge, formatAbsoluteAgo, bucketizeActivity, sparkPath, renderSparkSVG, buildHeatHistogram, HIST_BUCKETS };
