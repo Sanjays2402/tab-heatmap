@@ -6,6 +6,8 @@ const LOG = "[tab-heatmap:popup]";
 const MSG = Object.freeze({
   GET_LAST_ACCESSED: "th:getLastAccessed",
   GET_ACTIVATION_COUNTS: "th:getActivationCounts",
+  CLOSE_IDLE: "th:closeIdle",
+  GET_SETTINGS: "th:getSettings",
 });
 
 // Recency half-life: a tab cools to 0.5 heat after this many ms since last access.
@@ -25,10 +27,11 @@ function applyTheme() {
 }
 
 /** Wrap chrome.runtime.sendMessage in a promise with a safe fallback. */
-function sendMessage(type) {
+function sendMessage(type, payload) {
   return new Promise((resolve) => {
     try {
-      chrome.runtime.sendMessage({ type }, (resp) => {
+      const msg = Object.assign({ type }, payload && typeof payload === "object" ? payload : {});
+      chrome.runtime.sendMessage(msg, (resp) => {
         if (chrome.runtime.lastError) {
           console.warn(LOG, "sendMessage error:", chrome.runtime.lastError.message);
           resolve({ ok: false, map: {} });
@@ -244,8 +247,97 @@ function wireSettings() {
   });
 }
 
+/**
+ * Wire up the "Close idle" action.
+ * UX: click once -> the button enters a confirm state ("Close N tabs?") for ~4s,
+ * a second click within that window executes the close. This prevents an
+ * accidental click from nuking a long tab list.
+ */
+async function wireCloseIdle() {
+  const btn = document.getElementById("close-idle-btn");
+  const pill = document.getElementById("idle-threshold-pill");
+  const status = document.getElementById("toolbar-status");
+  const labelEl = btn?.querySelector(".action-label");
+  if (!btn || !labelEl) return;
+
+  let settings = await sendMessage(MSG.GET_SETTINGS).then((r) => r?.settings || { idleCloseDays: 7 });
+  let days = settings.idleCloseDays || 7;
+  const originalLabel = labelEl.textContent;
+  if (pill) pill.textContent = `${days}d`;
+
+  /** Count current candidates client-side for the confirm copy. */
+  async function countCandidates() {
+    const now = Date.now();
+    const thresholdMs = days * 24 * 60 * 60 * 1000;
+    const [tabs, accessedResp] = await Promise.all([
+      getAllTabs(),
+      sendMessage(MSG.GET_LAST_ACCESSED),
+    ]);
+    const accessed = accessedResp?.map || {};
+    let n = 0;
+    for (const t of tabs) {
+      if (!t || typeof t.id !== "number") continue;
+      if (t.pinned || t.active || t.audible) continue;
+      const key = String(t.id);
+      const m = accessed[key];
+      const stamp = typeof m === "number" ? m : (typeof t.lastAccessed === "number" ? t.lastAccessed : 0);
+      if (stamp <= 0) continue;
+      if (now - stamp >= thresholdMs) n++;
+    }
+    return n;
+  }
+
+  let confirmTimer = 0;
+  let armed = false;
+
+  function disarm() {
+    armed = false;
+    btn.classList.remove("is-confirming");
+    labelEl.textContent = originalLabel;
+    if (confirmTimer) { clearTimeout(confirmTimer); confirmTimer = 0; }
+  }
+
+  function setStatus(text, warn) {
+    if (!status) return;
+    status.textContent = text || "";
+    status.classList.toggle("is-warn", !!warn);
+  }
+
+  btn.addEventListener("click", async (ev) => {
+    ev.preventDefault();
+    if (!armed) {
+      const n = await countCandidates();
+      if (n === 0) {
+        setStatus(`No tabs idle over ${days}d`, false);
+        return;
+      }
+      armed = true;
+      btn.classList.add("is-confirming");
+      labelEl.textContent = `Close ${n} tab${n === 1 ? "" : "s"}?`;
+      setStatus("Click again to confirm", true);
+      confirmTimer = setTimeout(disarm, 4000);
+      return;
+    }
+    // Confirmed — execute.
+    btn.setAttribute("disabled", "true");
+    setStatus("Closing…", false);
+    const result = await sendMessage(MSG.CLOSE_IDLE, { days });
+    btn.removeAttribute("disabled");
+    disarm();
+    if (result?.ok) {
+      const c = result.closed || 0;
+      setStatus(c === 0 ? "Nothing to close" : `Closed ${c} tab${c === 1 ? "" : "s"}`, false);
+      // Re-render after a beat so the user sees the result, then refresh the list.
+      setTimeout(() => { render().catch(() => {}); }, 150);
+    } else {
+      setStatus(result?.error ? `Failed: ${result.error}` : "Failed", true);
+    }
+  });
+}
+
 applyTheme();
 wireSettings();
+wireCloseIdle().catch((err) => console.warn(LOG, "wireCloseIdle failed:", err));
 render().catch((err) => console.warn(LOG, "render failed:", err));
 
 // Expose for unit-style smoke tests in a non-extension runtime.

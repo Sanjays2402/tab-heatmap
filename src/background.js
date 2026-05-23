@@ -11,7 +11,99 @@ const MSG = Object.freeze({
   PING: "th:ping",
   GET_LAST_ACCESSED: "th:getLastAccessed",
   GET_ACTIVATION_COUNTS: "th:getActivationCounts",
+  CLOSE_IDLE: "th:closeIdle",
+  GET_SETTINGS: "th:getSettings",
+  SET_SETTINGS: "th:setSettings",
 });
+
+/** Default settings. Persisted in chrome.storage.local under SETTINGS_KEY. */
+const SETTINGS_KEY = "th:settings";
+const DEFAULT_SETTINGS = Object.freeze({
+  idleCloseDays: 7, // Close tabs untouched for this many days when user triggers close-idle.
+});
+
+async function readSettings() {
+  try {
+    const out = await chrome.storage.local.get(SETTINGS_KEY);
+    const s = out?.[SETTINGS_KEY];
+    const merged = { ...DEFAULT_SETTINGS, ...(s && typeof s === "object" ? s : {}) };
+    // Clamp to a sane range so the UI can't get into a bricked state.
+    const d = Number(merged.idleCloseDays);
+    merged.idleCloseDays = Number.isFinite(d) && d >= 1 ? Math.min(365, Math.max(1, d)) : DEFAULT_SETTINGS.idleCloseDays;
+    return merged;
+  } catch (err) {
+    console.warn(LOG_PREFIX, "readSettings failed:", err);
+    return { ...DEFAULT_SETTINGS };
+  }
+}
+
+async function writeSettings(patch) {
+  try {
+    const cur = await readSettings();
+    const next = { ...cur, ...(patch && typeof patch === "object" ? patch : {}) };
+    await chrome.storage.local.set({ [SETTINGS_KEY]: next });
+    return next;
+  } catch (err) {
+    console.warn(LOG_PREFIX, "writeSettings failed:", err);
+    return null;
+  }
+}
+
+/**
+ * Compute the effective last-access timestamp for a tab.
+ * Prefers our tracked map; falls back to chrome's t.lastAccessed; then 0.
+ */
+function effectiveStamp(tab, accessedMap) {
+  const key = String(tab?.id);
+  const m = accessedMap?.[key];
+  if (typeof m === "number" && Number.isFinite(m)) return m;
+  if (typeof tab?.lastAccessed === "number") return tab.lastAccessed;
+  return 0;
+}
+
+/**
+ * Close every tab idle longer than `days` days.
+ * Excludes: pinned tabs, the currently-active tab in each window, tabs with audio,
+ * and tabs the user is currently dragging/loading. Returns a summary.
+ */
+async function closeIdleTabs(days) {
+  const d = Number(days);
+  if (!Number.isFinite(d) || d < 1) {
+    return { ok: false, error: "invalid_days", closed: 0, candidates: 0, scanned: 0 };
+  }
+  if (!chrome?.tabs?.query || !chrome?.tabs?.remove) {
+    return { ok: false, error: "tabs_api_unavailable", closed: 0, candidates: 0, scanned: 0 };
+  }
+  const thresholdMs = d * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const [tabs, accessed] = await Promise.all([
+    chrome.tabs.query({}),
+    readLastAccessed(),
+  ]);
+  const toClose = [];
+  for (const t of tabs) {
+    if (!t || typeof t.id !== "number") continue;
+    if (t.pinned) continue;
+    if (t.active) continue;
+    if (t.audible) continue;
+    const stamp = effectiveStamp(t, accessed);
+    // If we genuinely have no signal (stamp 0), don't reap — safer default.
+    if (stamp <= 0) continue;
+    if (now - stamp >= thresholdMs) toClose.push(t.id);
+  }
+  if (toClose.length === 0) {
+    return { ok: true, closed: 0, candidates: 0, scanned: tabs.length, days: d };
+  }
+  try {
+    await chrome.tabs.remove(toClose);
+    // Best-effort cleanup of our maps; onRemoved listeners will catch most cases too.
+    await Promise.all(toClose.map((id) => forgetTab(id)));
+    return { ok: true, closed: toClose.length, candidates: toClose.length, scanned: tabs.length, days: d };
+  } catch (err) {
+    console.warn(LOG_PREFIX, "closeIdleTabs remove failed:", err);
+    return { ok: false, error: String(err?.message || err), closed: 0, candidates: toClose.length, scanned: tabs.length, days: d };
+  }
+}
 
 /** Storage key namespace for per-tab last-accessed map. */
 const LAST_ACCESSED_KEY = "th:lastAccessed";
@@ -164,6 +256,24 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === MSG.GET_ACTIVATION_COUNTS) {
     readActivationCounts().then((map) => sendResponse({ ok: true, map }));
     return true; // async response
+  }
+  if (msg.type === MSG.GET_SETTINGS) {
+    readSettings().then((settings) => sendResponse({ ok: true, settings }));
+    return true;
+  }
+  if (msg.type === MSG.SET_SETTINGS) {
+    writeSettings(msg.patch).then((settings) => sendResponse({ ok: !!settings, settings: settings || null }));
+    return true;
+  }
+  if (msg.type === MSG.CLOSE_IDLE) {
+    (async () => {
+      const requested = Number(msg?.days);
+      const settings = await readSettings();
+      const days = Number.isFinite(requested) && requested >= 1 ? requested : settings.idleCloseDays;
+      const result = await closeIdleTabs(days);
+      sendResponse(result);
+    })();
+    return true;
   }
   return false;
 });
