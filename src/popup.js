@@ -1108,6 +1108,121 @@ async function wireSuspendIdle() {
   });
 }
 
+/**
+ * Collect URLs of cold tabs (idle longer than the configured idleCloseDays).
+ * Excludes pinned, active, audible, and already-discarded tabs — same shape as
+ * the close-idle candidate set so users can preview/save before nuking.
+ * Returns { urls, items, days } where items mirror the closedTabs metadata.
+ */
+async function collectColdTabs(days) {
+  const now = Date.now();
+  const d = Number.isFinite(days) && days > 0 ? days : 7;
+  const thresholdMs = d * 24 * 60 * 60 * 1000;
+  const [tabs, accessedResp] = await Promise.all([
+    getAllTabs(),
+    sendMessage(MSG.GET_LAST_ACCESSED),
+  ]);
+  const accessed = accessedResp?.map || {};
+  const items = [];
+  for (const t of tabs) {
+    if (!t || typeof t.id !== "number") continue;
+    if (t.pinned || t.active || t.audible) continue;
+    if (typeof t.url !== "string" || !/^https?:|^file:|^ftp:/.test(t.url)) continue;
+    const key = String(t.id);
+    const m = accessed[key];
+    const stamp = typeof m === "number" ? m : (typeof t.lastAccessed === "number" ? t.lastAccessed : 0);
+    if (stamp <= 0) continue;
+    if (now - stamp < thresholdMs) continue;
+    items.push({
+      url: t.url,
+      title: t.title || "",
+      lastAccessed: stamp,
+      pinned: !!t.pinned,
+      windowId: t.windowId,
+    });
+  }
+  return { urls: items.map((i) => i.url), items, days: d };
+}
+
+/**
+ * Write text to the clipboard using the async Clipboard API with a
+ * document.execCommand fallback for sandboxed extension popup contexts where
+ * the Permissions API path can be flaky. Returns true on success.
+ */
+async function writeClipboardText(text) {
+  const s = typeof text === "string" ? text : "";
+  try {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+      await navigator.clipboard.writeText(s);
+      return true;
+    }
+  } catch (err) {
+    console.warn(LOG, "clipboard.writeText failed, falling back:", err);
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = s;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    ta.style.pointerEvents = "none";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return !!ok;
+  } catch (err) {
+    console.warn(LOG, "clipboard fallback failed:", err);
+    return false;
+  }
+}
+
+/**
+ * Wire the "Copy cold" toolbar action. Collects URLs of idle (cold-close
+ * candidate) tabs and writes them to the clipboard as a newline-separated
+ * list — a safety net users can save before running Close idle.
+ */
+async function wireCopyColdUrls() {
+  const btn = document.getElementById("copy-cold-btn");
+  const pill = document.getElementById("copy-cold-pill");
+  const status = document.getElementById("toolbar-status");
+  if (!btn) return;
+  const settings = await sendMessage(MSG.GET_SETTINGS).then((r) => r?.settings || { idleCloseDays: 7 });
+  const days = settings.idleCloseDays || 7;
+  if (pill) pill.textContent = `${days}d`;
+
+  function setStatus(text, warn) {
+    if (!status) return;
+    status.textContent = text || "";
+    status.classList.toggle("is-warn", !!warn);
+  }
+
+  btn.addEventListener("click", async (ev) => {
+    ev.preventDefault();
+    btn.setAttribute("disabled", "true");
+    try {
+      const { urls, days: d } = await collectColdTabs(days);
+      if (urls.length === 0) {
+        setStatus(`No idle tabs to copy (>${d}d)`, false);
+        return;
+      }
+      const text = urls.join("\n");
+      const ok = await writeClipboardText(text);
+      if (ok) {
+        setStatus(`Copied ${urls.length} URL${urls.length === 1 ? "" : "s"} to clipboard`, false);
+      } else {
+        setStatus("Copy failed — clipboard blocked", true);
+      }
+    } catch (err) {
+      console.warn(LOG, "copy cold urls failed:", err);
+      setStatus("Copy failed", true);
+    } finally {
+      btn.removeAttribute("disabled");
+    }
+  });
+}
+
 /** Wire the "Group by host" toggle. Persists state in chrome.storage.local. */
 async function wireGroupToggle() {
   const btn = document.getElementById("group-toggle-btn");
@@ -1490,6 +1605,7 @@ wireSettings();
 wireGroupFilter().catch((err) => console.warn(LOG, "wireGroupFilter failed:", err));
 wireCloseIdle().catch((err) => console.warn(LOG, "wireCloseIdle failed:", err));
 wireSuspendIdle().catch((err) => console.warn(LOG, "wireSuspendIdle failed:", err));
+wireCopyColdUrls().catch((err) => console.warn(LOG, "wireCopyColdUrls failed:", err));
 wireExport().catch((err) => console.warn(LOG, "wireExport failed:", err));
 wireImport().catch((err) => console.warn(LOG, "wireImport failed:", err));
 wireJumpHottest();
@@ -1995,4 +2111,4 @@ async function wireGroupFilter() {
 }
 
 // Expose for unit-style smoke tests in a non-extension runtime.
-export { buildRows, recencyScore, frequencyScore, heatColor, groupRowsByHost, buildSnapshot, parseSnapshot, rowMatchesFilter, normalizeQuery, sortRows, sortGroups, formatRelativeTime, formatAbsoluteTime, formatCompactAge, formatAbsoluteAgo, bucketizeActivity, sparkPath, renderSparkSVG, buildHeatHistogram, HIST_BUCKETS, applyGroupFilter, tabGroupColorCss };
+export { buildRows, recencyScore, frequencyScore, heatColor, groupRowsByHost, buildSnapshot, parseSnapshot, rowMatchesFilter, normalizeQuery, sortRows, sortGroups, formatRelativeTime, formatAbsoluteTime, formatCompactAge, formatAbsoluteAgo, bucketizeActivity, sparkPath, renderSparkSVG, buildHeatHistogram, HIST_BUCKETS, applyGroupFilter, tabGroupColorCss, collectColdTabs, writeClipboardText };
