@@ -8,6 +8,7 @@ const MSG = Object.freeze({
   GET_ACTIVATION_COUNTS: "th:getActivationCounts",
   CLOSE_IDLE: "th:closeIdle",
   GET_SETTINGS: "th:getSettings",
+  RESTORE_TAB_META: "th:restoreTabMeta",
 });
 
 // Recency half-life default: a tab cools to 0.5 heat after this many ms since last access.
@@ -571,6 +572,116 @@ async function wireExport() {
   });
 }
 
+/**
+ * Parse and validate a Tab Heatmap snapshot JSON blob.
+ * Throws on schema mismatch so the caller can surface a friendly error.
+ */
+function parseSnapshot(text) {
+  let data;
+  try { data = JSON.parse(text); }
+  catch { throw new Error("Not valid JSON"); }
+  if (!data || typeof data !== "object") throw new Error("Empty snapshot");
+  if (data.schema !== "tab-heatmap.snapshot") throw new Error("Wrong schema");
+  if (!Array.isArray(data.tabs)) throw new Error("Missing tabs[]");
+  return data;
+}
+
+/**
+ * Restore a snapshot:
+ *  - Re-open any URL from the snapshot that isn't already open in the current
+ *    window-set (matched by exact URL). Pinned snapshot tabs are re-pinned.
+ *  - For every restored URL (and every already-open match), patch the
+ *    background's last-accessed + activation maps so heat survives the round-trip.
+ * Returns a summary {opened, matched, skipped, total}.
+ */
+async function restoreSnapshot(snapshot) {
+  const items = Array.isArray(snapshot.tabs) ? snapshot.tabs : [];
+  if (items.length === 0) return { opened: 0, matched: 0, skipped: 0, total: 0 };
+
+  const openTabs = await getAllTabs();
+  const urlToTabId = new Map();
+  for (const t of openTabs) {
+    if (t && typeof t.id === "number" && typeof t.url === "string" && t.url) {
+      // Last write wins; good enough for restore-merge semantics.
+      urlToTabId.set(t.url, t.id);
+    }
+  }
+
+  let opened = 0, matched = 0, skipped = 0;
+  const metaEntries = [];
+
+  for (const it of items) {
+    if (!it || typeof it.url !== "string" || !/^https?:|^file:|^ftp:/.test(it.url)) {
+      skipped++; continue;
+    }
+    const existingId = urlToTabId.get(it.url);
+    if (typeof existingId === "number") {
+      matched++;
+      metaEntries.push({ tabId: existingId, lastAccessed: it.lastAccessed || 0, activations: it.activations || 0 });
+      continue;
+    }
+    try {
+      const created = await chrome.tabs.create({
+        url: it.url,
+        active: false,
+        pinned: !!it.pinned,
+      });
+      if (created && typeof created.id === "number") {
+        opened++;
+        metaEntries.push({ tabId: created.id, lastAccessed: it.lastAccessed || 0, activations: it.activations || 0 });
+      }
+    } catch (err) {
+      console.warn(LOG, "restore create failed:", err, it.url);
+      skipped++;
+    }
+  }
+
+  if (metaEntries.length > 0) {
+    await sendMessage(MSG.RESTORE_TAB_META, { entries: metaEntries });
+  }
+  return { opened, matched, skipped, total: items.length };
+}
+
+/** Wire the "Import" button: pick a JSON file and restore it. */
+async function wireImport() {
+  const btn = document.getElementById("import-btn");
+  const file = document.getElementById("import-file");
+  const status = document.getElementById("toolbar-status");
+  if (!btn || !file) return;
+  function setStatus(text, warn) {
+    if (!status) return;
+    status.textContent = text || "";
+    status.classList.toggle("is-warn", !!warn);
+  }
+  btn.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    file.value = ""; // allow re-selecting the same file
+    file.click();
+  });
+  file.addEventListener("change", async () => {
+    const f = file.files && file.files[0];
+    if (!f) return;
+    btn.setAttribute("disabled", "true");
+    setStatus("Importing…", false);
+    try {
+      const text = await f.text();
+      const snapshot = parseSnapshot(text);
+      const result = await restoreSnapshot(snapshot);
+      const parts = [];
+      if (result.opened) parts.push(`opened ${result.opened}`);
+      if (result.matched) parts.push(`matched ${result.matched}`);
+      if (result.skipped) parts.push(`skipped ${result.skipped}`);
+      setStatus(parts.length ? `Restored: ${parts.join(", ")}` : "Nothing to restore", false);
+      setTimeout(() => { render().catch(() => {}); }, 200);
+    } catch (err) {
+      console.warn(LOG, "import failed:", err);
+      setStatus(`Import failed: ${err?.message || "unknown"}`, true);
+    } finally {
+      btn.removeAttribute("disabled");
+    }
+  });
+}
+
 function applyGroupToggleVisual(btn) {
   btn.setAttribute("aria-pressed", GROUP_BY_HOST ? "true" : "false");
   btn.classList.toggle("is-active", GROUP_BY_HOST);
@@ -582,7 +693,8 @@ applyTheme();
 wireSettings();
 wireCloseIdle().catch((err) => console.warn(LOG, "wireCloseIdle failed:", err));
 wireExport().catch((err) => console.warn(LOG, "wireExport failed:", err));
+wireImport().catch((err) => console.warn(LOG, "wireImport failed:", err));
 wireGroupToggle().then(() => render()).catch((err) => console.warn(LOG, "render failed:", err));
 
 // Expose for unit-style smoke tests in a non-extension runtime.
-export { buildRows, recencyScore, frequencyScore, heatColor, groupRowsByHost, buildSnapshot };
+export { buildRows, recencyScore, frequencyScore, heatColor, groupRowsByHost, buildSnapshot, parseSnapshot };

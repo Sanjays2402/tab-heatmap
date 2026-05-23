@@ -14,6 +14,7 @@ const MSG = Object.freeze({
   CLOSE_IDLE: "th:closeIdle",
   GET_SETTINGS: "th:getSettings",
   SET_SETTINGS: "th:setSettings",
+  RESTORE_TAB_META: "th:restoreTabMeta",
 });
 
 /** Default settings. Persisted in chrome.storage.local under SETTINGS_KEY. */
@@ -269,6 +270,37 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   if (msg.type === MSG.SET_SETTINGS) {
     writeSettings(msg.patch).then((settings) => sendResponse({ ok: !!settings, settings: settings || null }));
+    return true;
+  }
+  if (msg.type === MSG.RESTORE_TAB_META) {
+    (async () => {
+      try {
+        const entries = Array.isArray(msg.entries) ? msg.entries : [];
+        const [accessed, counts] = await Promise.all([
+          readLastAccessed(),
+          readActivationCounts(),
+        ]);
+        let touched = 0;
+        for (const e of entries) {
+          if (!e || typeof e.tabId !== "number") continue;
+          const key = String(e.tabId);
+          if (Number.isFinite(e.lastAccessed) && e.lastAccessed > 0) {
+            accessed[key] = e.lastAccessed;
+            touched++;
+          }
+          if (Number.isFinite(e.activations) && e.activations > 0) {
+            counts[key] = Math.floor(e.activations);
+          }
+        }
+        await chrome.storage.session.set({
+          [LAST_ACCESSED_KEY]: accessed,
+          [ACTIVATION_COUNT_KEY]: counts,
+        });
+        sendResponse({ ok: true, touched });
+      } catch (err) {
+        sendResponse({ ok: false, error: String(err?.message || err) });
+      }
+    })();
     return true;
   }
   if (msg.type === MSG.CLOSE_IDLE) {

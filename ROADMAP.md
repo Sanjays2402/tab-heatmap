@@ -11,7 +11,7 @@ This file is the agent's task queue. Unchecked items get implemented in order. W
 - [x] Configurable thresholds in options page
 - [x] Group tabs by host with rollup heat score
 - [x] Export tab snapshot to JSON
-- [ ] Restore tab snapshot from JSON
+- [x] Restore tab snapshot from JSON
 - [ ] Keyboard shortcut: jump to hottest tab
 - [ ] Pinned tabs always excluded from cold-close
 - [ ] Per-domain heat decay rate
