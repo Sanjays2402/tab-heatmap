@@ -24,7 +24,31 @@ const DEFAULT_SETTINGS = Object.freeze({
   idleCloseDays: 7, // Close tabs untouched for this many days when user triggers close-idle.
   hotThreshold: 0.5, // Heat score (0..1) at which a tab counts as "hot" in popup stats.
   recencyHalfLifeMinutes: 30, // Half-life for recency decay used by the popup heat score.
+  // Per-domain override map: { "github.com": 240, "news.ycombinator.com": 5 }
+  // Each entry overrides recencyHalfLifeMinutes for tabs on that host.
+  domainHalfLifeMinutes: {},
 });
+
+/** Lowercase + strip leading www. so user input "WWW.GitHub.com" matches "github.com". */
+function normalizeHost(h) {
+  if (typeof h !== "string") return "";
+  return h.trim().toLowerCase().replace(/^www\./, "").replace(/\/+$/, "");
+}
+
+/** Sanitize a domain → minutes map; drops invalid entries, clamps values. */
+function sanitizeDomainMap(raw) {
+  const out = {};
+  if (!raw || typeof raw !== "object") return out;
+  for (const [k, v] of Object.entries(raw)) {
+    const host = normalizeHost(k);
+    if (!host) continue;
+    if (!/^[a-z0-9.-]+\.[a-z]{2,}$|^localhost$/.test(host)) continue;
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < 1) continue;
+    out[host] = Math.min(1440, Math.max(1, Math.round(n)));
+  }
+  return out;
+}
 
 async function readSettings() {
   try {
@@ -38,6 +62,7 @@ async function readSettings() {
     merged.hotThreshold = Number.isFinite(h) ? Math.min(0.95, Math.max(0.05, h)) : DEFAULT_SETTINGS.hotThreshold;
     const r = Number(merged.recencyHalfLifeMinutes);
     merged.recencyHalfLifeMinutes = Number.isFinite(r) && r >= 1 ? Math.min(1440, Math.max(1, r)) : DEFAULT_SETTINGS.recencyHalfLifeMinutes;
+    merged.domainHalfLifeMinutes = sanitizeDomainMap(merged.domainHalfLifeMinutes);
     return merged;
   } catch (err) {
     console.warn(LOG_PREFIX, "readSettings failed:", err);
@@ -222,11 +247,20 @@ async function forgetTab(tabId) {
  *   heat = 0.6 * recency + 0.4 * frequency
  * recency = 0.5 ^ (ageMs / halfLifeMs); frequency = count / max(count).
  */
-function computeHeat(tab, accessedMap, countsMap, maxCount, halfLifeMs, now) {
+function computeHeat(tab, accessedMap, countsMap, maxCount, halfLifeMs, now, domainMap) {
   const key = String(tab?.id);
   const stamp = effectiveStamp(tab, accessedMap);
   const age = Math.max(0, now - stamp);
-  const r = stamp > 0 ? Math.pow(0.5, age / halfLifeMs) : 0;
+  // Per-domain override beats the global default.
+  let hl = halfLifeMs;
+  if (domainMap && tab?.url) {
+    try {
+      const host = normalizeHost(new URL(tab.url).hostname);
+      const mins = domainMap[host];
+      if (Number.isFinite(mins) && mins > 0) hl = mins * 60 * 1000;
+    } catch { /* ignore unparseable urls */ }
+  }
+  const r = stamp > 0 ? Math.pow(0.5, age / hl) : 0;
   const c = typeof countsMap?.[key] === "number" ? countsMap[key] : 0;
   const f = maxCount > 0 ? Math.min(1, c / maxCount) : 0;
   return 0.6 * r + 0.4 * f;
@@ -262,7 +296,7 @@ async function jumpToHottestTab() {
   for (const t of tabs) {
     if (!t || typeof t.id !== "number") continue;
     if (t.id === activeInCurrent) continue;
-    const h = computeHeat(t, accessed, counts, maxCount, halfLifeMs, now);
+    const h = computeHeat(t, accessed, counts, maxCount, halfLifeMs, now, settings.domainHalfLifeMinutes);
     if (h > bestHeat) { bestHeat = h; best = t; }
   }
   if (!best) return { ok: false, error: "no_candidate" };

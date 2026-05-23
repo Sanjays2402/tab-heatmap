@@ -226,3 +226,70 @@ input[type="range"]::-moz-range-thumb {
     var(--glass-hi);
   border-color: color-mix(in oklab, var(--accent) 60%, var(--line));
 }
+
+.domain-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.domain-empty {
+  font-size: 12.5px;
+  color: var(--fg-faint);
+  padding: 8px 4px;
+}
+.domain-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--glass-hi);
+  border: 1px solid var(--line);
+  transition: border-color 200ms var(--ease), background 200ms var(--ease);
+}
+.domain-row:hover { border-color: rgba(255,255,255,.14); }
+.domain-host {
+  flex: 1 1 auto;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.domain-mins-input {
+  width: 78px;
+}
+.domain-remove {
+  padding: 6px 8px;
+  color: var(--fg-dim);
+}
+.domain-remove:hover {
+  color: color-mix(in oklab, #ff3b2f 70%, var(--fg));
+}
+.domain-add {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 4px;
+}
+.domain-add input[type="text"] {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--glass-hi);
+  border: 1px solid var(--line);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  transition: border-color 200ms var(--ease), background 200ms var(--ease);
+}
+.domain-add input[type="text"]:focus {
+  outline: none;
+  border-color: var(--ring);
+}
+.domain-add input[type="number"] { width: 78px; }

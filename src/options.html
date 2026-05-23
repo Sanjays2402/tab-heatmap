@@ -86,6 +86,32 @@
       </div>
     </section>
 
+    <section class="card" aria-labelledby="domain-h">
+      <div class="card-head">
+        <svg class="card-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="9"/>
+          <path d="M3 12h18"/>
+          <path d="M12 3a14 14 0 010 18M12 3a14 14 0 000 18"/>
+        </svg>
+        <div>
+          <h2 id="domain-h" class="card-title">Per-domain decay</h2>
+          <p class="card-sub">Override the half-life for specific hosts. News sites can cool fast, dashboards can stay warm.</p>
+        </div>
+      </div>
+      <ul id="domain-list" class="domain-list" aria-label="Per-domain decay overrides"></ul>
+      <div class="domain-add">
+        <input id="domain-host" type="text" placeholder="github.com" autocomplete="off" spellcheck="false">
+        <input id="domain-mins" type="number" min="1" max="1440" step="1" value="60" inputmode="numeric">
+        <span class="unit">min</span>
+        <button id="domain-add-btn" type="button" class="btn btn-ghost" aria-label="Add domain override">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 5v14M5 12h14"/>
+          </svg>
+          <span>Add</span>
+        </button>
+      </div>
+    </section>
+
     <footer class="actions">
       <button id="reset-btn" class="btn btn-ghost" type="button">Reset defaults</button>
       <span id="status" class="status" role="status" aria-live="polite"></span>

@@ -12,6 +12,7 @@ const DEFAULTS = Object.freeze({
   idleCloseDays: 7,
   hotThreshold: 0.5,
   recencyHalfLifeMinutes: 30,
+  domainHalfLifeMinutes: {},
 });
 
 const LIMITS = Object.freeze({
@@ -103,11 +104,91 @@ const half = bindPair("half-slider", "half-input", {
   onChange: () => markDirty(),
 });
 
+/** Normalize hostname for the per-domain map (lowercase, strip www.). */
+function normalizeHost(h) {
+  if (typeof h !== "string") return "";
+  return h.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/^www\./, "");
+}
+
+/** Validate that a string looks like a usable host. */
+function isValidHost(h) {
+  return /^[a-z0-9.-]+\.[a-z]{2,}$|^localhost$/.test(h);
+}
+
+/** In-memory edit copy of the per-domain map; persisted on save. */
+let domainMap = {};
+
+function renderDomainList() {
+  const list = document.getElementById("domain-list");
+  if (!list) return;
+  list.innerHTML = "";
+  const entries = Object.entries(domainMap).sort(([a], [b]) => a.localeCompare(b));
+  if (entries.length === 0) {
+    const li = document.createElement("li");
+    li.className = "domain-empty";
+    li.textContent = "No overrides yet. Defaults apply to every host.";
+    list.appendChild(li);
+    return;
+  }
+  for (const [host, mins] of entries) {
+    const li = document.createElement("li");
+    li.className = "domain-row";
+    li.innerHTML =
+      '<span class="domain-host"></span>' +
+      '<input class="domain-mins-input" type="number" min="1" max="1440" step="1" inputmode="numeric">' +
+      '<span class="unit">min</span>' +
+      '<button type="button" class="btn btn-ghost domain-remove" aria-label="Remove override">' +
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+          '<path d="M6 6l12 12M18 6L6 18"/>' +
+        '</svg>' +
+      '</button>';
+    li.querySelector(".domain-host").textContent = host;
+    const input = li.querySelector(".domain-mins-input");
+    input.value = String(mins);
+    input.addEventListener("input", () => {
+      const n = clamp(input.value, 1, 1440, mins);
+      domainMap[host] = n;
+      markDirty();
+    });
+    li.querySelector(".domain-remove").addEventListener("click", () => {
+      delete domainMap[host];
+      renderDomainList();
+      markDirty();
+    });
+    list.appendChild(li);
+  }
+}
+
+function wireDomainAdd() {
+  const hostEl = document.getElementById("domain-host");
+  const minsEl = document.getElementById("domain-mins");
+  const addBtn = document.getElementById("domain-add-btn");
+  if (!hostEl || !minsEl || !addBtn) return;
+  const add = () => {
+    const host = normalizeHost(hostEl.value);
+    if (!host || !isValidHost(host)) {
+      setStatus("Enter a valid host (e.g. github.com)", "warn");
+      hostEl.focus();
+      return;
+    }
+    const mins = clamp(minsEl.value, 1, 1440, 30);
+    domainMap[host] = mins;
+    hostEl.value = "";
+    minsEl.value = "60";
+    renderDomainList();
+    markDirty();
+  };
+  addBtn.addEventListener("click", add);
+  hostEl.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); add(); } });
+  minsEl.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); add(); } });
+}
+
 function readForm() {
   return {
     idleCloseDays: idle.get(),
     hotThreshold: hot.get() / 100,
     recencyHalfLifeMinutes: half.get(),
+    domainHalfLifeMinutes: { ...domainMap },
   };
 }
 
@@ -115,14 +196,20 @@ function writeForm(s) {
   idle.set(s.idleCloseDays);
   hot.set(Math.round((s.hotThreshold ?? DEFAULTS.hotThreshold) * 100));
   half.set(s.recencyHalfLifeMinutes);
+  domainMap = (s.domainHalfLifeMinutes && typeof s.domainHalfLifeMinutes === "object")
+    ? { ...s.domainHalfLifeMinutes }
+    : {};
+  renderDomainList();
 }
 
 function markDirty() {
   const cur = readForm();
+  const sameDomain = JSON.stringify(cur.domainHalfLifeMinutes) === JSON.stringify(initial.domainHalfLifeMinutes || {});
   const changed =
     cur.idleCloseDays !== initial.idleCloseDays ||
     cur.hotThreshold !== initial.hotThreshold ||
-    cur.recencyHalfLifeMinutes !== initial.recencyHalfLifeMinutes;
+    cur.recencyHalfLifeMinutes !== initial.recencyHalfLifeMinutes ||
+    !sameDomain;
   setStatus(changed ? "Unsaved changes" : "", changed ? "warn" : "");
 }
 
@@ -133,6 +220,7 @@ async function load() {
     idleCloseDays: clamp(s.idleCloseDays, LIMITS.idleCloseDays.min, LIMITS.idleCloseDays.max, DEFAULTS.idleCloseDays),
     hotThreshold: clamp(s.hotThreshold, 0.05, 0.95, DEFAULTS.hotThreshold),
     recencyHalfLifeMinutes: clamp(s.recencyHalfLifeMinutes, LIMITS.recencyHalfLifeMinutes.min, LIMITS.recencyHalfLifeMinutes.max, DEFAULTS.recencyHalfLifeMinutes),
+    domainHalfLifeMinutes: (s.domainHalfLifeMinutes && typeof s.domainHalfLifeMinutes === "object") ? { ...s.domainHalfLifeMinutes } : {},
   };
   writeForm(initial);
   setStatus("", "");
@@ -149,6 +237,7 @@ async function save() {
       idleCloseDays: resp.settings.idleCloseDays,
       hotThreshold: resp.settings.hotThreshold,
       recencyHalfLifeMinutes: resp.settings.recencyHalfLifeMinutes,
+      domainHalfLifeMinutes: { ...(resp.settings.domainHalfLifeMinutes || {}) },
     };
     writeForm(initial);
     setStatus("Saved", "ok");
@@ -165,8 +254,9 @@ function resetDefaults() {
 
 els.save?.addEventListener("click", () => { save().catch((err) => { console.warn(LOG, err); setStatus("Save failed", "warn"); }); });
 els.reset?.addEventListener("click", resetDefaults);
+wireDomainAdd();
 
 load().catch((err) => { console.warn(LOG, "load failed:", err); setStatus("Failed to load settings", "warn"); });
 
 // Exposed for smoke testing in non-extension runtimes.
-export { clamp, readForm, writeForm, DEFAULTS, LIMITS };
+export { clamp, readForm, writeForm, DEFAULTS, LIMITS, normalizeHost, isValidHost };

@@ -24,6 +24,25 @@ const DEFAULT_HOT_THRESHOLD = 0.5;
 // Mutable runtime configuration, hydrated from settings on render.
 let RECENCY_HALF_LIFE_MS = DEFAULT_RECENCY_HALF_LIFE_MS;
 let HOT_THRESHOLD = DEFAULT_HOT_THRESHOLD;
+// host -> half-life minutes override map, hydrated from settings.
+let DOMAIN_HALF_LIFE = {};
+
+/** Normalize a hostname for the per-domain map lookup. */
+function normalizeHost(h) {
+  if (typeof h !== "string") return "";
+  return h.trim().toLowerCase().replace(/^www\./, "");
+}
+
+/** Effective half-life in ms for a given URL (falls back to global). */
+function halfLifeForUrl(url) {
+  if (!url) return RECENCY_HALF_LIFE_MS;
+  try {
+    const host = normalizeHost(new URL(url).hostname);
+    const mins = DOMAIN_HALF_LIFE[host];
+    if (Number.isFinite(mins) && mins > 0) return mins * 60 * 1000;
+  } catch { /* fall through */ }
+  return RECENCY_HALF_LIFE_MS;
+}
 
 /** Detect prefers-color-scheme and set body theme accordingly. */
 function applyTheme() {
@@ -65,12 +84,13 @@ async function getAllTabs() {
   }
 }
 
-/** Compute recency score in [0, 1] given last-access timestamp. */
-function recencyScore(lastAccessedMs, now) {
+/** Compute recency score in [0, 1] given last-access timestamp and a half-life. */
+function recencyScore(lastAccessedMs, now, halfLifeMs) {
   if (!Number.isFinite(lastAccessedMs)) return 0;
   const age = Math.max(0, now - lastAccessedMs);
-  // Exponential decay with half-life RECENCY_HALF_LIFE_MS.
-  return Math.pow(0.5, age / RECENCY_HALF_LIFE_MS);
+  const hl = (Number.isFinite(halfLifeMs) && halfLifeMs > 0) ? halfLifeMs : RECENCY_HALF_LIFE_MS;
+  // Exponential decay with half-life hl.
+  return Math.pow(0.5, age / hl);
 }
 
 /** Normalize activation count to [0,1] using the max in the set. */
@@ -91,7 +111,8 @@ function buildRows(tabs, accessedMap, countsMap) {
       ? accessedMap[key]
       : (typeof t.lastAccessed === "number" ? t.lastAccessed : 0);
     const count = typeof countsMap[key] === "number" ? countsMap[key] : 0;
-    const r = recencyScore(stamp, now);
+    const hl = halfLifeForUrl(t.url);
+    const r = recencyScore(stamp, now, hl);
     const f = frequencyScore(count, maxCount);
     const heat = RECENCY_WEIGHT * r + FREQUENCY_WEIGHT * f;
     return {
@@ -310,6 +331,9 @@ async function render() {
   if (Number.isFinite(settings.hotThreshold)) {
     HOT_THRESHOLD = Math.min(0.95, Math.max(0.05, settings.hotThreshold));
   }
+  DOMAIN_HALF_LIFE = (settings.domainHalfLifeMinutes && typeof settings.domainHalfLifeMinutes === "object")
+    ? settings.domainHalfLifeMinutes
+    : {};
 
   const rows = buildRows(tabs, accessedResp.map || {}, countsResp.map || {});
   const list = document.getElementById("tab-list");
