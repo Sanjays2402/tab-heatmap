@@ -523,3 +523,54 @@ body {
   border-color: color-mix(in oklab, var(--accent) 40%, var(--line));
 }
 .action-btn--ghost.is-active .action-icon { color: var(--accent); }
+
+/* Sort control — pill that wraps a native <select> */
+.sort-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 22px 6px 9px;
+  border-radius: 10px;
+  background: var(--glass-hi);
+  border: 1px solid var(--line);
+  color: var(--fg);
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  box-shadow: var(--glass-rim);
+  backdrop-filter: blur(16px) saturate(170%);
+  -webkit-backdrop-filter: blur(16px) saturate(170%);
+  transition: background 200ms var(--ease), border-color 200ms var(--ease), box-shadow 200ms var(--ease);
+  position: relative;
+}
+.sort-control:hover { border-color: rgba(255,255,255,.16); }
+.sort-control:focus-within {
+  border-color: color-mix(in oklab, var(--accent) 55%, var(--line));
+  box-shadow: var(--glass-rim), 0 0 0 2px var(--ring);
+}
+.sort-control .action-icon { color: var(--fg-dim); flex: 0 0 14px; }
+.sort-control:focus-within .action-icon { color: var(--accent); }
+.sort-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  color: var(--fg);
+  font: inherit;
+  font-size: 11.5px;
+  letter-spacing: -0.01em;
+  padding: 0;
+  cursor: pointer;
+  line-height: 1.2;
+}
+.sort-select option { background: var(--bg-1); color: var(--fg); }
+.sort-caret {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--fg-faint);
+  pointer-events: none;
+}

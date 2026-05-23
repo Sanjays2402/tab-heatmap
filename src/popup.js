@@ -156,6 +156,61 @@ function buildRows(tabs, accessedMap, countsMap) {
 }
 
 /**
+ * Sort row models by the chosen mode.
+ * Modes: "heat" (default), "recency", "frequency", "alpha".
+ * Returns a new array; never mutates the input.
+ */
+function sortRows(rows, mode) {
+  const arr = Array.isArray(rows) ? rows.slice() : [];
+  const cmpAlpha = (a, b) => {
+    const at = (a.title || a.url || "").toLowerCase();
+    const bt = (b.title || b.url || "").toLowerCase();
+    return at.localeCompare(bt);
+  };
+  switch (mode) {
+    case "recency":
+      // Most-recently accessed first; unknowns sink to the bottom.
+      arr.sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0) || b.heat - a.heat);
+      break;
+    case "frequency":
+      arr.sort((a, b) => (b.activations || 0) - (a.activations || 0) || b.heat - a.heat);
+      break;
+    case "alpha":
+      arr.sort(cmpAlpha);
+      break;
+    case "heat":
+    default:
+      arr.sort((a, b) => b.heat - a.heat);
+      break;
+  }
+  return arr;
+}
+
+/** Sort host groups according to the chosen mode. Children are sorted too. */
+function sortGroups(groups, mode) {
+  const arr = Array.isArray(groups) ? groups.slice() : [];
+  for (const g of arr) g.rows = sortRows(g.rows, mode);
+  switch (mode) {
+    case "recency": {
+      const stamp = (g) => g.rows.reduce((m, r) => Math.max(m, r.lastAccessed || 0), 0);
+      arr.sort((a, b) => stamp(b) - stamp(a) || b.heat - a.heat);
+      break;
+    }
+    case "frequency":
+      arr.sort((a, b) => (b.activations || 0) - (a.activations || 0) || b.heat - a.heat);
+      break;
+    case "alpha":
+      arr.sort((a, b) => a.host.localeCompare(b.host));
+      break;
+    case "heat":
+    default:
+      arr.sort((a, b) => b.heat - a.heat || b.rows.length - a.rows.length);
+      break;
+  }
+  return arr;
+}
+
+/**
  * Map a heat score in [0,1] to a CSS color along the gradient:
  *   cold (≤0)   → blue   #3da3ff
  *   mid  (0.5)  → amber  #ffb547
@@ -364,9 +419,10 @@ async function render() {
   applyTheme(settings.theme);
 
   const rows = buildRows(tabs, accessedResp.map || {}, countsResp.map || {});
-  const allRows = rows;
+  const sortedAll = sortRows(rows, SORT_MODE);
+  const allRows = sortedAll;
   const q = FILTER_QUERY;
-  const filtered = q ? rows.filter((r) => rowMatchesFilter(r, q)) : rows;
+  const filtered = q ? sortedAll.filter((r) => rowMatchesFilter(r, q)) : sortedAll;
   const list = document.getElementById("tab-list");
   const empty = document.getElementById("empty-state");
   const noMatches = document.getElementById("no-matches");
@@ -400,7 +456,7 @@ async function render() {
   const frag = document.createDocumentFragment();
   if (GROUP_BY_HOST) {
     list.classList.add("is-grouped");
-    const groups = groupRowsByHost(filtered);
+    const groups = sortGroups(groupRowsByHost(filtered), SORT_MODE);
     // Default: expand groups whose rollup heat ≥ HOT_THRESHOLD, collapse the rest.
     // Per-host overrides come from chrome.storage.local ("th:groupOpen:<host>").
     let overrides = {};
@@ -839,6 +895,30 @@ function applyGroupToggleVisual(btn) {
 
 let GROUP_BY_HOST = false;
 let FILTER_QUERY = "";
+let SORT_MODE = "heat";
+
+const VALID_SORT_MODES = new Set(["heat", "recency", "frequency", "alpha"]);
+
+/** Wire the sort dropdown. Persists last choice in chrome.storage.local. */
+async function wireSort() {
+  const sel = document.getElementById("sort-select");
+  if (!sel) return;
+  try {
+    const stored = await new Promise((resolve) => {
+      chrome.storage?.local?.get?.(["th:sortMode"], (items) => resolve(items || {}));
+    });
+    const v = stored["th:sortMode"];
+    if (typeof v === "string" && VALID_SORT_MODES.has(v)) SORT_MODE = v;
+  } catch {}
+  sel.value = SORT_MODE;
+  sel.addEventListener("change", () => {
+    const next = sel.value;
+    if (!VALID_SORT_MODES.has(next)) return;
+    SORT_MODE = next;
+    try { chrome.storage?.local?.set?.({ "th:sortMode": SORT_MODE }); } catch {}
+    render().catch((err) => console.warn(LOG, "sort re-render failed:", err));
+  });
+}
 
 /** Lowercase + trim for the filter compare. */
 function normalizeQuery(q) {
@@ -884,7 +964,9 @@ wireExport().catch((err) => console.warn(LOG, "wireExport failed:", err));
 wireImport().catch((err) => console.warn(LOG, "wireImport failed:", err));
 wireJumpHottest();
 wireSearch();
-wireGroupToggle().then(() => render()).catch((err) => console.warn(LOG, "render failed:", err));
+Promise.all([wireSort(), wireGroupToggle()])
+  .then(() => render())
+  .catch((err) => console.warn(LOG, "render failed:", err));
 
 // Expose for unit-style smoke tests in a non-extension runtime.
-export { buildRows, recencyScore, frequencyScore, heatColor, groupRowsByHost, buildSnapshot, parseSnapshot, rowMatchesFilter, normalizeQuery };
+export { buildRows, recencyScore, frequencyScore, heatColor, groupRowsByHost, buildSnapshot, parseSnapshot, rowMatchesFilter, normalizeQuery, sortRows, sortGroups };

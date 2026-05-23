@@ -18,7 +18,7 @@ This file is the agent's task queue. Unchecked items get implemented in order. W
 - [x] Liquid-glass popup UI (frosted, Phosphor icons)
 - [x] Dark/light theme with auto detection
 - [x] Search/filter tabs in popup by title or URL
-- [ ] Sort tabs by heat, recency, frequency, or alphabetical
+- [x] Sort tabs by heat, recency, frequency, or alphabetical
 - [ ] Hover tooltip showing last-accessed time + activation count
 - [ ] Bulk-select tabs with checkboxes and close selected
 - [ ] Heat-score sparkline (last 24h activity per tab)
