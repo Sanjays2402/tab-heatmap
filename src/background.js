@@ -211,6 +211,9 @@ async function closeIdleTabs(days) {
     await chrome.tabs.remove(verified);
     // Best-effort cleanup of our maps; onRemoved listeners will catch most cases too.
     await Promise.all(verified.map((id) => forgetTab(id)));
+    // Force an immediate badge recompute — onRemoved already schedules one,
+    // but this collapses the visual delay after a manual cold-close burst.
+    if (typeof scheduleBadgeRefresh === "function") scheduleBadgeRefresh(50);
     return { ok: true, closed: verified.length, candidates: candidates.length, scanned: tabs.length, skippedPinned, skippedWhitelist, days: d };
   } catch (err) {
     console.warn(LOG_PREFIX, "closeIdleTabs remove failed:", err);
@@ -573,5 +576,103 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   return false;
 });
+
+/**
+ * Compute the count of cold tabs (idle > settings.idleCloseDays) and reflect
+ * it on the toolbar badge. Empty string when zero so the badge stays clean.
+ * Uses the same isColdCloseCandidate predicate as the bulk-close action so
+ * the badge count and the close-idle action agree exactly.
+ */
+async function refreshColdBadge() {
+  try {
+    if (!chrome?.action?.setBadgeText) return;
+    const [tabs, accessed, settings] = await Promise.all([
+      chrome.tabs.query({}),
+      readLastAccessed(),
+      readSettings(),
+    ]);
+    const thresholdMs = Math.max(1, settings.idleCloseDays) * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const whitelist = sanitizeHostList(settings.coldWhitelist);
+    let cold = 0;
+    for (const t of tabs) {
+      if (isColdCloseCandidate(t, accessed, now, thresholdMs, whitelist)) cold++;
+    }
+    const text = cold > 0 ? (cold > 999 ? "999+" : String(cold)) : "";
+    await chrome.action.setBadgeText({ text });
+    if (chrome.action.setBadgeBackgroundColor) {
+      // Cool slate so a non-zero badge reads as informational, not alarming.
+      await chrome.action.setBadgeBackgroundColor({ color: "#3b4252" });
+    }
+    if (chrome.action.setBadgeTextColor) {
+      try { await chrome.action.setBadgeTextColor({ color: "#ffffff" }); } catch { /* older runtimes */ }
+    }
+    const titleBase = "Tab Heatmap";
+    const title = cold > 0
+      ? `${titleBase} \u2014 ${cold} cold tab${cold === 1 ? "" : "s"} (idle > ${settings.idleCloseDays}d)`
+      : titleBase;
+    if (chrome.action.setTitle) await chrome.action.setTitle({ title });
+    return cold;
+  } catch (err) {
+    console.warn(LOG_PREFIX, "refreshColdBadge failed:", err);
+    return -1;
+  }
+}
+
+/** Debounced badge refresh — coalesces bursts of tab events. */
+let _badgeTimer = null;
+function scheduleBadgeRefresh(delayMs = 750) {
+  if (_badgeTimer) return;
+  _badgeTimer = setTimeout(() => {
+    _badgeTimer = null;
+    refreshColdBadge();
+  }, delayMs);
+}
+
+// Refresh the badge on tab lifecycle changes so it stays roughly live.
+if (chrome?.tabs?.onActivated) chrome.tabs.onActivated.addListener(() => scheduleBadgeRefresh());
+if (chrome?.tabs?.onRemoved) chrome.tabs.onRemoved.addListener(() => scheduleBadgeRefresh());
+if (chrome?.tabs?.onCreated) chrome.tabs.onCreated.addListener(() => scheduleBadgeRefresh());
+if (chrome?.tabs?.onUpdated) chrome.tabs.onUpdated.addListener((_id, change) => {
+  if (change?.pinned !== undefined || change?.url || change?.status === "complete") {
+    scheduleBadgeRefresh();
+  }
+});
+
+// Periodic refresh: tabs grow colder with the clock, not just with events.
+const BADGE_ALARM = "th:badgeRefresh";
+if (chrome?.alarms?.onAlarm) {
+  chrome.alarms.onAlarm.addListener((a) => {
+    if (a?.name === BADGE_ALARM) refreshColdBadge();
+  });
+}
+async function ensureBadgeAlarm() {
+  try {
+    if (!chrome?.alarms?.create) return;
+    const existing = chrome.alarms.get ? await chrome.alarms.get(BADGE_ALARM) : null;
+    if (!existing) {
+      // Every 5 minutes is plenty — the threshold is measured in days.
+      chrome.alarms.create(BADGE_ALARM, { periodInMinutes: 5 });
+    }
+  } catch (err) {
+    console.warn(LOG_PREFIX, "ensureBadgeAlarm failed:", err);
+  }
+}
+
+// Re-render the badge whenever settings change (idleCloseDays / whitelist).
+if (chrome?.storage?.onChanged) {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "local" && changes && changes[SETTINGS_KEY]) scheduleBadgeRefresh(250);
+  });
+}
+
+// Wire badge bootstrap into the existing install/startup paths.
+chrome.runtime.onInstalled.addListener(() => { ensureBadgeAlarm(); scheduleBadgeRefresh(250); });
+chrome.runtime.onStartup.addListener(() => { ensureBadgeAlarm(); scheduleBadgeRefresh(250); });
+// And on cold SW boot — the listeners above only fire on those lifecycle
+// events, but a freshly-spawned SW (e.g. after idle eviction) also needs a
+// kick to render the badge against the current tab state.
+ensureBadgeAlarm();
+scheduleBadgeRefresh(500);
 
 console.log(LOG_PREFIX, "service worker booted");
