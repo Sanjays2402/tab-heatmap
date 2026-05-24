@@ -44,6 +44,6 @@ This file is the agent's task queue. Unchecked items get implemented in order. W
 - [x] CSV export of tab usage stats over time
 - [x] Weekly digest view: top 10 hottest and coldest tabs of the week
 - [x] Drag-to-reorder tab priority within popup
-- [ ] Focus mode: dim all tabs except the top-N hottest
+- [x] Focus mode: dim all tabs except the top-N hottest
 - [ ] Custom accent color picker in options page
 - [ ] Onboarding tour: first-run highlight of popup features

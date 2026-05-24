@@ -772,7 +772,9 @@ async function toggleTabMute(tabId, nextMuted) {
 /** Create a single tab row element. */
 function rowElement(row) {
   const li = document.createElement("li");
-  li.className = "tab-row" + (row.active ? " active" : "") + (SELECT_MODE ? " is-selectable" : "") + (SELECT_MODE && SELECTED.has(row.id) ? " is-selected" : "");
+  const dimmed = FOCUS_MODE && row.__focusDim ? " is-dimmed" : "";
+  const focusHot = FOCUS_MODE && row.__focusHot ? " is-focus-hot" : "";
+  li.className = "tab-row" + (row.active ? " active" : "") + (SELECT_MODE ? " is-selectable" : "") + (SELECT_MODE && SELECTED.has(row.id) ? " is-selected" : "") + dimmed + focusHot;
   li.setAttribute("role", SELECT_MODE ? "checkbox" : "button");
   li.setAttribute("tabindex", "0");
   if (SELECT_MODE) li.setAttribute("aria-checked", SELECTED.has(row.id) ? "true" : "false");
@@ -1112,6 +1114,19 @@ async function render() {
   for (const r of rows) r.groupId = tabIdToGroup.has(r.id) ? tabIdToGroup.get(r.id) : -1;
   const sortedAll = sortRows(rows, SORT_MODE);
   const allRows = sortedAll;
+  // Focus mode: mark the top-N hottest rows (by heat, regardless of current
+  // sort order) and dim the rest. Pinned + active tabs are always kept lit.
+  if (FOCUS_MODE) {
+    const byHeat = allRows.slice().sort((a, b) => b.heat - a.heat);
+    const keep = new Set(byHeat.slice(0, FOCUS_TOP_N).map((r) => r.id));
+    for (const r of allRows) {
+      const lit = keep.has(r.id) || r.pinned || r.active;
+      r.__focusHot = keep.has(r.id);
+      r.__focusDim = !lit;
+    }
+  } else {
+    for (const r of allRows) { r.__focusHot = false; r.__focusDim = false; }
+  }
   renderHeatHistogram(allRows);
   renderHeatMinimap(allRows);
   const q = FILTER_QUERY;
@@ -2569,6 +2584,49 @@ function wireDigest() {
 }
 
 /** Wire the "Hottest" button: asks the SW to focus the hottest tab. */
+/**
+ * Wire focus-mode toggle. When active, dims all rows except the top-N hottest
+ * tabs (pinned + active stay lit). N is clamped 1..20 and cycled by clicking
+ * the pill. Both flag and N persist in chrome.storage.local.
+ */
+async function wireFocusMode() {
+  const btn = document.getElementById("focus-mode-btn");
+  const pill = document.getElementById("focus-top-pill");
+  if (!btn || !pill) return;
+  try {
+    const stored = await new Promise((resolve) => {
+      chrome.storage?.local?.get?.(["th:focusMode", "th:focusTopN"], (items) => resolve(items || {}));
+    });
+    FOCUS_MODE = !!stored["th:focusMode"];
+    const n = Number(stored["th:focusTopN"]);
+    if (Number.isFinite(n) && n >= FOCUS_TOP_N_MIN && n <= FOCUS_TOP_N_MAX) FOCUS_TOP_N = Math.round(n);
+  } catch {}
+  applyFocusVisual(btn, pill);
+  btn.addEventListener("click", (ev) => {
+    // Clicking the pill cycles N (3 → 5 → 7 → 10 → 15 → 3) without flipping mode.
+    if (ev.target && (ev.target === pill || (ev.target.closest && ev.target.closest("#focus-top-pill")))) {
+      const cycle = [3, 5, 7, 10, 15];
+      const idx = cycle.indexOf(FOCUS_TOP_N);
+      FOCUS_TOP_N = cycle[(idx + 1) % cycle.length] || 5;
+      try { chrome.storage?.local?.set?.({ "th:focusTopN": FOCUS_TOP_N }); } catch {}
+      applyFocusVisual(btn, pill);
+      if (FOCUS_MODE) render().catch((err) => console.warn(LOG, "focus re-render failed:", err));
+      return;
+    }
+    FOCUS_MODE = !FOCUS_MODE;
+    try { chrome.storage?.local?.set?.({ "th:focusMode": FOCUS_MODE }); } catch {}
+    applyFocusVisual(btn, pill);
+    render().catch((err) => console.warn(LOG, "focus re-render failed:", err));
+  });
+}
+
+function applyFocusVisual(btn, pill) {
+  btn.setAttribute("aria-pressed", FOCUS_MODE ? "true" : "false");
+  btn.classList.toggle("is-active", FOCUS_MODE);
+  if (pill) pill.textContent = String(FOCUS_TOP_N);
+  document.body.classList.toggle("is-focus-mode", FOCUS_MODE);
+}
+
 function wireJumpHottest() {
   const btn = document.getElementById("jump-hottest-btn");
   const status = document.getElementById("toolbar-status");
@@ -2655,6 +2713,11 @@ let GROUP_BY_HOST = false;
 let CLUSTER_BY_DOMAIN = false;
 let FILTER_QUERY = "";
 let SORT_MODE = "heat";
+// Focus mode: dim all but the top-N hottest tabs. N is configurable & persisted.
+let FOCUS_MODE = false;
+let FOCUS_TOP_N = 5;
+const FOCUS_TOP_N_MIN = 1;
+const FOCUS_TOP_N_MAX = 20;
 // Chrome tab-group id to filter by, or "all" for no filter, or "none" for ungrouped tabs.
 let GROUP_FILTER = "all";
 // Cached map of tabGroups.Group keyed by id, refreshed on each render.
@@ -2739,6 +2802,7 @@ wireRestoreSession().catch((err) => console.warn(LOG, "wireRestoreSession failed
 wireQuickChips().catch((err) => console.warn(LOG, "wireQuickChips failed:", err));
 wireDigest();
 wireJumpHottest();
+wireFocusMode().catch((err) => console.warn(LOG, "wireFocusMode failed:", err));
 wireSearch();
 wireBulkSelect();
 Promise.all([wireSort(), wireGroupToggle(), wireClusterToggle(), resolveCurrentWindowId()])
