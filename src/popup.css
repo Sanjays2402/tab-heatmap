@@ -1527,3 +1527,61 @@ body.is-focus-mode .tab-row.is-focus-hot::after {
   background: color-mix(in oklab, var(--accent) 18%, var(--surface-2));
   color: var(--accent);
 }
+
+/* Onboarding tour — first-run guided spotlight over popup features. */
+.tour { position: fixed; inset: 0; z-index: 200; display: flex; align-items: flex-end; justify-content: center; padding: 12px; pointer-events: none; }
+.tour.hidden { display: none; }
+.tour-backdrop { position: absolute; inset: 0; background: color-mix(in oklab, #000 32%, transparent); backdrop-filter: blur(2px); pointer-events: auto; animation: tour-fade 220ms var(--ease); }
+.tour-spotlight {
+  position: absolute;
+  pointer-events: none;
+  border-radius: 14px;
+  box-shadow: 0 0 0 4000px color-mix(in oklab, #000 52%, transparent), 0 0 0 2px color-mix(in oklab, var(--accent) 65%, transparent), 0 0 0 6px color-mix(in oklab, var(--accent) 18%, transparent);
+  transition: top 240ms var(--ease), left 240ms var(--ease), width 240ms var(--ease), height 240ms var(--ease), opacity 220ms var(--ease);
+  opacity: 0;
+}
+.tour-spotlight.is-visible { opacity: 1; }
+.tour-card {
+  position: relative;
+  pointer-events: auto;
+  width: min(360px, 100%);
+  padding: 16px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, var(--glass-hi), var(--glass));
+  backdrop-filter: blur(28px) saturate(1.2);
+  -webkit-backdrop-filter: blur(28px) saturate(1.2);
+  box-shadow: var(--glass-rim-strong), 0 12px 40px rgba(0, 0, 0, 0.35);
+  color: var(--fg);
+  animation: tour-rise 240ms var(--ease);
+}
+.tour-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.tour-step-pill {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--accent) 18%, var(--surface-2));
+  color: var(--accent);
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.tour-title { font-size: 15px; letter-spacing: -0.01em; font-weight: 600; margin: 0; line-height: 1.3; }
+.tour-body { margin: 0 0 12px; font-size: 12.5px; line-height: 1.5; color: var(--fg-2); }
+.tour-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.tour-nav { display: flex; gap: 6px; }
+.tour-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 30px; padding: 0 12px;
+  border-radius: 8px; border: 1px solid transparent;
+  background: transparent; color: var(--fg);
+  font-size: 12px; font-weight: 500; cursor: pointer;
+  transition: background 180ms var(--ease), border-color 180ms var(--ease), transform 180ms var(--ease), opacity 180ms var(--ease);
+}
+.tour-btn--ghost { color: var(--fg-2); }
+.tour-btn--ghost:hover { background: var(--glass); color: var(--fg); }
+.tour-btn--accent { background: var(--accent); color: #fff; border-color: color-mix(in oklab, var(--accent) 80%, #000 20%); }
+.tour-btn--accent:hover { transform: translateY(-1px); }
+.tour-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.tour-btn:focus-visible { outline: 2px solid color-mix(in oklab, var(--accent) 60%, transparent); outline-offset: 2px; }
+@keyframes tour-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes tour-fade { from { opacity: 0; } to { opacity: 1; } }

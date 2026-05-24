@@ -1491,6 +1491,148 @@ function wireSettings() {
 }
 
 /**
+ * Onboarding tour: first-run guided spotlight over the popup's marquee features.
+ * State is persisted in chrome.storage.local under "th:onboardingSeen" so the
+ * tour only fires once per profile. Users can replay it via the dev-only hook
+ * `window.__tabHeatmapShowTour()`.
+ */
+const TOUR_STEPS = [
+  {
+    target: "#tab-list",
+    title: "Welcome to Tab Heatmap",
+    body: "Every open tab gets a heat score from how often and how recently you use it. Cold tabs fade, hot tabs glow.",
+  },
+  {
+    target: "#search-input",
+    title: "Search and sort",
+    body: "Filter tabs by title or URL, then sort by heat, recency, frequency, or alphabetical.",
+  },
+  {
+    target: "#quick-chips",
+    title: "Quick actions",
+    body: "One-click: close cold tabs, suspend cold tabs to free RAM, or pin every hot tab so it survives sweeps.",
+  },
+  {
+    target: "#close-idle-btn",
+    title: "Sweep idle tabs",
+    body: "Close, copy, or suspend tabs idle past your threshold. Pinned and whitelisted hosts are always safe.",
+  },
+  {
+    target: "#settings-btn",
+    title: "Make it yours",
+    body: "Tune thresholds, decay rates, per-domain rules, whitelists, and your accent color in settings.",
+  },
+];
+const ONBOARDING_KEY = "th:onboardingSeen";
+
+function wireOnboardingTour() {
+  const overlay = document.getElementById("onboarding-tour");
+  if (!overlay) return;
+  const card = document.getElementById("tour-card");
+  const spotlight = document.getElementById("tour-spotlight");
+  const title = document.getElementById("tour-title");
+  const body = document.getElementById("tour-body");
+  const pill = document.getElementById("tour-step-pill");
+  const backBtn = document.getElementById("tour-back");
+  const nextBtn = document.getElementById("tour-next");
+  const nextLabel = document.getElementById("tour-next-label");
+  if (!card || !spotlight || !title || !body || !pill || !backBtn || !nextBtn || !nextLabel) return;
+
+  let idx = 0;
+  let onResize = null;
+  let onKey = null;
+
+  function positionSpotlight(step) {
+    const target = step?.target ? document.querySelector(step.target) : null;
+    if (!target) { spotlight.classList.remove("is-visible"); return; }
+    const rect = target.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) { spotlight.classList.remove("is-visible"); return; }
+    const pad = 6;
+    spotlight.style.top = `${Math.max(0, rect.top - pad)}px`;
+    spotlight.style.left = `${Math.max(0, rect.left - pad)}px`;
+    spotlight.style.width = `${rect.width + pad * 2}px`;
+    spotlight.style.height = `${rect.height + pad * 2}px`;
+    spotlight.classList.add("is-visible");
+  }
+
+  function renderStep() {
+    const step = TOUR_STEPS[idx];
+    if (!step) return;
+    pill.textContent = `${idx + 1} / ${TOUR_STEPS.length}`;
+    title.textContent = step.title;
+    body.textContent = step.body;
+    backBtn.disabled = idx === 0;
+    const last = idx === TOUR_STEPS.length - 1;
+    nextLabel.textContent = last ? "Got it" : "Next";
+    positionSpotlight(step);
+  }
+
+  function open() {
+    idx = 0;
+    overlay.classList.remove("hidden");
+    overlay.setAttribute("aria-hidden", "false");
+    document.body.classList.add("is-tour");
+    renderStep();
+    // Focus the primary action for keyboard nav.
+    setTimeout(() => { try { nextBtn.focus(); } catch {} }, 50);
+    onResize = () => positionSpotlight(TOUR_STEPS[idx]);
+    window.addEventListener("resize", onResize);
+    onKey = (ev) => {
+      if (ev.key === "Escape") { ev.preventDefault(); dismiss(); }
+      else if (ev.key === "ArrowRight" || ev.key === "Enter") { ev.preventDefault(); advance(); }
+      else if (ev.key === "ArrowLeft") { ev.preventDefault(); goBack(); }
+    };
+    document.addEventListener("keydown", onKey);
+  }
+
+  function close() {
+    overlay.classList.add("hidden");
+    overlay.setAttribute("aria-hidden", "true");
+    document.body.classList.remove("is-tour");
+    spotlight.classList.remove("is-visible");
+    if (onResize) { window.removeEventListener("resize", onResize); onResize = null; }
+    if (onKey) { document.removeEventListener("keydown", onKey); onKey = null; }
+  }
+
+  function markSeen() {
+    try { chrome.storage?.local?.set?.({ [ONBOARDING_KEY]: { seen: true, version: 1, at: Date.now() } }); } catch {}
+  }
+
+  function dismiss() { markSeen(); close(); }
+
+  function advance() {
+    if (idx >= TOUR_STEPS.length - 1) { dismiss(); return; }
+    idx += 1;
+    renderStep();
+  }
+
+  function goBack() {
+    if (idx <= 0) return;
+    idx -= 1;
+    renderStep();
+  }
+
+  nextBtn.addEventListener("click", advance);
+  backBtn.addEventListener("click", goBack);
+  overlay.querySelectorAll("[data-tour-dismiss]").forEach((el) => {
+    el.addEventListener("click", dismiss);
+  });
+
+  // Dev/test hook to replay the tour without resetting storage.
+  try { window.__tabHeatmapShowTour = open; } catch {}
+
+  // Auto-open on first run after the popup has rendered.
+  try {
+    chrome.storage?.local?.get?.([ONBOARDING_KEY], (items) => {
+      const seen = items && items[ONBOARDING_KEY] && items[ONBOARDING_KEY].seen;
+      if (seen) return;
+      // Wait a tick so the list and toolbar have laid out before we spotlight.
+      setTimeout(() => { try { open(); } catch (err) { console.warn(LOG, "tour open failed:", err); } }, 280);
+    });
+  } catch {}
+}
+
+/**
  * Wire up the "Close idle" action.
  * UX: click once -> the button enters a confirm state ("Close N tabs?") for ~4s,
  * a second click within that window executes the close. This prevents an
@@ -2810,6 +2952,7 @@ function highlightInto(el, text, query) {
 
 applyTheme();
 wireSettings();
+wireOnboardingTour();
 wireGroupFilter().catch((err) => console.warn(LOG, "wireGroupFilter failed:", err));
 wireCloseIdle().catch((err) => console.warn(LOG, "wireCloseIdle failed:", err));
 wireSuspendIdle().catch((err) => console.warn(LOG, "wireSuspendIdle failed:", err));

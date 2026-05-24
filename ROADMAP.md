@@ -46,4 +46,4 @@ This file is the agent's task queue. Unchecked items get implemented in order. W
 - [x] Drag-to-reorder tab priority within popup
 - [x] Focus mode: dim all tabs except the top-N hottest
 - [x] Custom accent color picker in options page
-- [ ] Onboarding tour: first-run highlight of popup features
+- [x] Onboarding tour: first-run highlight of popup features
