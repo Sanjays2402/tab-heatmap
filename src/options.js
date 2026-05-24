@@ -18,6 +18,8 @@ const DEFAULTS = Object.freeze({
   theme: "auto",
   dailySummaryEnabled: true,
   dailySummaryHour: 9,
+  autoSuspendEnabled: false,
+  autoSuspendHours: 24,
 });
 
 const VALID_THEMES = new Set(["auto", "light", "dark"]);
@@ -335,6 +337,8 @@ function wireDomainAdd() {
 function readForm() {
   const dailyEl = document.getElementById("daily-enabled");
   const hourEl = document.getElementById("daily-hour");
+  const autoEl = document.getElementById("autosuspend-enabled");
+  const autoHoursEl = document.getElementById("autosuspend-hours");
   return {
     idleCloseDays: idle.get(),
     hotThreshold: hot.get() / 100,
@@ -344,6 +348,8 @@ function readForm() {
     theme: VALID_THEMES.has(themePref) ? themePref : "auto",
     dailySummaryEnabled: dailyEl ? !!dailyEl.checked : DEFAULTS.dailySummaryEnabled,
     dailySummaryHour: clamp(hourEl?.value, 0, 23, DEFAULTS.dailySummaryHour),
+    autoSuspendEnabled: autoEl ? !!autoEl.checked : DEFAULTS.autoSuspendEnabled,
+    autoSuspendHours: clamp(autoHoursEl?.value, 1, 720, DEFAULTS.autoSuspendHours),
   };
 }
 
@@ -360,6 +366,10 @@ function writeForm(s) {
   const hourEl = document.getElementById("daily-hour");
   if (dailyEl) dailyEl.checked = s.dailySummaryEnabled !== false;
   if (hourEl) hourEl.value = String(clamp(s.dailySummaryHour, 0, 23, DEFAULTS.dailySummaryHour));
+  const autoEl = document.getElementById("autosuspend-enabled");
+  const autoHoursEl = document.getElementById("autosuspend-hours");
+  if (autoEl) autoEl.checked = s.autoSuspendEnabled === true;
+  if (autoHoursEl) autoHoursEl.value = String(clamp(s.autoSuspendHours, 1, 720, DEFAULTS.autoSuspendHours));
   applyTheme(themePref);
   renderThemeSeg();
   renderDomainList();
@@ -377,6 +387,8 @@ function markDirty() {
     cur.theme !== (initial.theme || "auto") ||
     cur.dailySummaryEnabled !== (initial.dailySummaryEnabled !== false) ||
     cur.dailySummaryHour !== (initial.dailySummaryHour ?? DEFAULTS.dailySummaryHour) ||
+    cur.autoSuspendEnabled !== (initial.autoSuspendEnabled === true) ||
+    cur.autoSuspendHours !== (initial.autoSuspendHours ?? DEFAULTS.autoSuspendHours) ||
     !sameDomain ||
     !sameWhitelist;
   setStatus(changed ? "Unsaved changes" : "", changed ? "warn" : "");
@@ -394,6 +406,8 @@ async function load() {
     theme: VALID_THEMES.has(s.theme) ? s.theme : DEFAULTS.theme,
     dailySummaryEnabled: s.dailySummaryEnabled !== false,
     dailySummaryHour: clamp(s.dailySummaryHour, 0, 23, DEFAULTS.dailySummaryHour),
+    autoSuspendEnabled: s.autoSuspendEnabled === true,
+    autoSuspendHours: clamp(s.autoSuspendHours, 1, 720, DEFAULTS.autoSuspendHours),
   };
   writeForm(initial);
   setStatus("", "");
@@ -415,6 +429,8 @@ async function save() {
       theme: VALID_THEMES.has(resp.settings.theme) ? resp.settings.theme : DEFAULTS.theme,
       dailySummaryEnabled: resp.settings.dailySummaryEnabled !== false,
       dailySummaryHour: clamp(resp.settings.dailySummaryHour, 0, 23, DEFAULTS.dailySummaryHour),
+      autoSuspendEnabled: resp.settings.autoSuspendEnabled === true,
+      autoSuspendHours: clamp(resp.settings.autoSuspendHours, 1, 720, DEFAULTS.autoSuspendHours),
     };
     writeForm(initial);
     setStatus("Saved", "ok");
@@ -493,6 +509,14 @@ document.getElementById("daily-hour")?.addEventListener("blur", (ev) => {
   const el = ev.target;
   if (!(el instanceof HTMLInputElement)) return;
   el.value = String(clamp(el.value, 0, 23, DEFAULTS.dailySummaryHour));
+  markDirty();
+});
+document.getElementById("autosuspend-enabled")?.addEventListener("change", markDirty);
+document.getElementById("autosuspend-hours")?.addEventListener("input", markDirty);
+document.getElementById("autosuspend-hours")?.addEventListener("blur", (ev) => {
+  const el = ev.target;
+  if (!(el instanceof HTMLInputElement)) return;
+  el.value = String(clamp(el.value, 1, 720, DEFAULTS.autoSuspendHours));
   markDirty();
 });
 

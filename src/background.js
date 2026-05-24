@@ -41,6 +41,11 @@ const DEFAULT_SETTINGS = Object.freeze({
   dailySummaryEnabled: true,
   // Local hour-of-day (0..23) at which the daily summary fires.
   dailySummaryHour: 9,
+  // Auto-suspend rule: when enabled, a periodic alarm discards tabs that
+  // have been idle longer than `autoSuspendHours`. Same exclusions as the
+  // manual suspend path (pinned, active, audible, whitelisted, no signal).
+  autoSuspendEnabled: false,
+  autoSuspendHours: 24,
 });
 
 const VALID_THEMES = new Set(["auto", "light", "dark"]);
@@ -97,6 +102,11 @@ async function readSettings() {
     merged.dailySummaryEnabled = merged.dailySummaryEnabled !== false;
     const dh = Number(merged.dailySummaryHour);
     merged.dailySummaryHour = Number.isFinite(dh) ? Math.min(23, Math.max(0, Math.round(dh))) : DEFAULT_SETTINGS.dailySummaryHour;
+    merged.autoSuspendEnabled = merged.autoSuspendEnabled === true;
+    const ah = Number(merged.autoSuspendHours);
+    // Range: 1h .. 720h (30 days). Sub-hour discards would thrash; >30d is
+    // close-territory, not suspend-territory.
+    merged.autoSuspendHours = Number.isFinite(ah) && ah >= 1 ? Math.min(720, Math.max(1, Math.round(ah))) : DEFAULT_SETTINGS.autoSuspendHours;
     return merged;
   } catch (err) {
     console.warn(LOG_PREFIX, "readSettings failed:", err);
@@ -1093,3 +1103,109 @@ if (chrome?.storage?.onChanged) {
 chrome.runtime.onInstalled.addListener(() => { ensureDailySummaryAlarm(); });
 chrome.runtime.onStartup.addListener(() => { ensureDailySummaryAlarm(); });
 ensureDailySummaryAlarm();
+
+/**
+ * Auto-suspend rule — periodic alarm that discards tabs idle longer than
+ * `settings.autoSuspendHours`. Reuses the same isColdCloseCandidate
+ * predicate (with an hours-based threshold) so the auto behaviour matches
+ * the manual Suspend Cold action: pinned/active/audible/whitelisted tabs
+ * and tabs with no recorded access stamp are always preserved. Tabs that
+ * are already discarded are skipped so the cycle is a no-op once the cold
+ * tail is suspended.
+ */
+const AUTO_SUSPEND_ALARM = "th:autoSuspend";
+/** How often the alarm wakes up. Hours is the user-visible knob; this is
+ *  just the polling cadence and is intentionally fast enough that the rule
+ *  feels live, but slow enough to not waste cycles. */
+const AUTO_SUSPEND_PERIOD_MIN = 15;
+
+async function runAutoSuspendCycle() {
+  try {
+    const settings = await readSettings();
+    if (!settings.autoSuspendEnabled) return { ok: true, skipped: "disabled" };
+    if (!chrome?.tabs?.query || !chrome?.tabs?.discard) {
+      return { ok: false, error: "discard_api_unavailable" };
+    }
+    const hours = Math.max(1, Math.min(720, Math.round(Number(settings.autoSuspendHours) || 24)));
+    const thresholdMs = hours * 60 * 60 * 1000;
+    const now = Date.now();
+    const [tabs, accessed] = await Promise.all([
+      chrome.tabs.query({}),
+      readLastAccessed(),
+    ]);
+    const whitelist = sanitizeHostList(settings.coldWhitelist);
+    const candidates = [];
+    for (const t of tabs) {
+      if (!isColdCloseCandidate(t, accessed, now, thresholdMs, whitelist)) continue;
+      if (t.discarded === true) continue;
+      candidates.push(t.id);
+    }
+    if (candidates.length === 0) return { ok: true, suspended: 0 };
+    // Race-safe re-verify, identical posture to the manual suspend path.
+    const verified = [];
+    await Promise.all(candidates.map(async (id) => {
+      try {
+        const fresh = await chrome.tabs.get(id);
+        if (!fresh) return;
+        if (fresh.pinned === true) return;
+        if (fresh.active === true) return;
+        if (fresh.discarded === true) return;
+        if (isHostWhitelisted(hostOfTab(fresh), whitelist)) return;
+        verified.push(id);
+      } catch { /* tab gone */ }
+    }));
+    if (verified.length === 0) return { ok: true, suspended: 0 };
+    let suspended = 0;
+    const results = await Promise.allSettled(verified.map((id) => chrome.tabs.discard(id)));
+    for (const r of results) {
+      if (r.status === "fulfilled" && r.value) suspended++;
+    }
+    if (suspended > 0 && typeof scheduleBadgeRefresh === "function") scheduleBadgeRefresh(50);
+    return { ok: true, suspended, candidates: candidates.length };
+  } catch (err) {
+    console.warn(LOG_PREFIX, "runAutoSuspendCycle failed:", err);
+    return { ok: false, error: String(err?.message || err) };
+  }
+}
+
+async function ensureAutoSuspendAlarm() {
+  try {
+    if (!chrome?.alarms?.create) return;
+    const settings = await readSettings();
+    if (!settings.autoSuspendEnabled) {
+      try { await chrome.alarms.clear(AUTO_SUSPEND_ALARM); } catch { /* noop */ }
+      return;
+    }
+    chrome.alarms.create(AUTO_SUSPEND_ALARM, { periodInMinutes: AUTO_SUSPEND_PERIOD_MIN });
+  } catch (err) {
+    console.warn(LOG_PREFIX, "ensureAutoSuspendAlarm failed:", err);
+  }
+}
+
+if (chrome?.alarms?.onAlarm) {
+  chrome.alarms.onAlarm.addListener((a) => {
+    if (a?.name === AUTO_SUSPEND_ALARM) runAutoSuspendCycle();
+  });
+}
+
+// Re-arm when the user flips the toggle or changes the hour threshold.
+if (chrome?.storage?.onChanged) {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local" || !changes || !changes[SETTINGS_KEY]) return;
+    const prev = changes[SETTINGS_KEY].oldValue || {};
+    const next = changes[SETTINGS_KEY].newValue || {};
+    if (prev.autoSuspendEnabled !== next.autoSuspendEnabled ||
+        prev.autoSuspendHours !== next.autoSuspendHours) {
+      ensureAutoSuspendAlarm();
+      // Fire a cycle immediately when the rule is freshly enabled so the
+      // user sees the effect without waiting for the first 15-min tick.
+      if (next.autoSuspendEnabled && !prev.autoSuspendEnabled) {
+        runAutoSuspendCycle();
+      }
+    }
+  });
+}
+
+chrome.runtime.onInstalled.addListener(() => { ensureAutoSuspendAlarm(); });
+chrome.runtime.onStartup.addListener(() => { ensureAutoSuspendAlarm(); });
+ensureAutoSuspendAlarm();

@@ -197,6 +197,32 @@
       </div>
     </section>
 
+    <section class="card" aria-labelledby="autosuspend-h">
+      <div class="card-head">
+        <svg class="card-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 3a9 9 0 109 9"/>
+          <path d="M12 7v5l3 2"/>
+          <path d="M16 3h5v5"/>
+        </svg>
+        <div>
+          <h2 id="autosuspend-h" class="card-title">Auto-suspend rule</h2>
+          <p class="card-sub">Quietly discard tabs that have been idle longer than the threshold. Same exclusions as manual suspend — pinned, active, audible, and whitelisted tabs are always safe.</p>
+        </div>
+      </div>
+      <div class="control">
+        <label class="toggle-row">
+          <span class="toggle-label">Auto-suspend cold tabs</span>
+          <input id="autosuspend-enabled" type="checkbox" class="toggle-input">
+          <span class="toggle-switch" aria-hidden="true"><span class="toggle-thumb"></span></span>
+        </label>
+        <div class="control-row">
+          <label for="autosuspend-hours" class="unit">Idle longer than</label>
+          <input id="autosuspend-hours" type="number" min="1" max="720" step="1" value="24" inputmode="numeric">
+          <span class="unit">hours</span>
+        </div>
+      </div>
+    </section>
+
     <section class="card card-danger" aria-labelledby="reset-h">
       <div class="card-head">
         <svg class="card-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">

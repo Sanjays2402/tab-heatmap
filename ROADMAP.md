@@ -39,7 +39,7 @@ This file is the agent's task queue. Unchecked items get implemented in order. W
 - [x] Per-window heat scoreboard in popup header
 - [x] Heatmap mini-map: visual grid of all tabs colored by heat
 - [x] Session restore: save and reload entire window state from snapshot
-- [ ] Auto-suspend rule: discard tabs cold for > configurable hours
+- [x] Auto-suspend rule: discard tabs cold for > configurable hours
 - [ ] Tab clustering: group similar-domain tabs into collapsible sections
 - [ ] CSV export of tab usage stats over time
 - [ ] Weekly digest view: top 10 hottest and coldest tabs of the week
