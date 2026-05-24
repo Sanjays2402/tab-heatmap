@@ -1803,6 +1803,119 @@ async function wireExport() {
   });
 }
 
+/** Escape a CSV cell: wrap in quotes when it contains commas, quotes, or
+ * newlines, and double any embedded quotes. RFC-4180-ish — Excel-safe.
+ */
+function csvEscape(value) {
+  if (value === null || value === undefined) return "";
+  const s = String(value);
+  if (s === "") return "";
+  if (/[",\n\r]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+/** Build a CSV string of tab usage stats over time.
+ * Columns: tabId, windowId, title, url, host, pinned, lastAccessedIso,
+ * lastAccessedMs, ageMs, activations, recency, frequency, heat, plus
+ * 24 hourly activity buckets (h-23 … h-0) ending at "now".
+ * The hourly columns are the same buckets the in-popup sparkline uses, so an
+ * external tool can re-draw the chart from the CSV alone.
+ */
+function buildUsageCsv(rows, now) {
+  const ref = Number.isFinite(now) ? now : Date.now();
+  const header = [
+    "tab_id", "window_id", "title", "url", "host", "pinned",
+    "last_accessed_iso", "last_accessed_ms", "first_opened_iso", "age_ms",
+    "activations", "recency", "frequency", "heat",
+  ];
+  for (let i = SPARK_BUCKETS - 1; i >= 0; i--) header.push(`h-${i}`);
+  const lines = [header.join(",")];
+  for (const r of rows) {
+    const buckets = bucketizeActivity(r.sparkSamples || [], ref);
+    const ageMs = (Number.isFinite(r.firstOpened) && r.firstOpened > 0)
+      ? Math.max(0, ref - r.firstOpened) : "";
+    const cells = [
+      r.id,
+      r.windowId,
+      csvEscape(r.title),
+      csvEscape(r.url),
+      csvEscape(hostnameOf(r.url)),
+      r.pinned ? 1 : 0,
+      r.lastAccessed ? new Date(r.lastAccessed).toISOString() : "",
+      r.lastAccessed || "",
+      (Number.isFinite(r.firstOpened) && r.firstOpened > 0) ? new Date(r.firstOpened).toISOString() : "",
+      ageMs,
+      r.activations || 0,
+      Number(r.recency || 0).toFixed(4),
+      Number(r.frequency || 0).toFixed(4),
+      Number(r.heat || 0).toFixed(4),
+    ];
+    for (const v of buckets) cells.push(v);
+    lines.push(cells.join(","));
+  }
+  return lines.join("\r\n") + "\r\n";
+}
+
+/** Trigger a text-file download (CSV) from the popup. */
+function downloadText(filename, text, mime) {
+  const blob = new Blob([text], { type: mime || "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.rel = "noopener";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    try { document.body.removeChild(a); } catch {}
+    try { URL.revokeObjectURL(url); } catch {}
+  }, 250);
+}
+
+/** Wire the "Export CSV" button: builds a usage-stats CSV and downloads it. */
+async function wireCsvExport() {
+  const btn = document.getElementById("csv-export-btn");
+  const status = document.getElementById("toolbar-status");
+  if (!btn) return;
+  function setStatus(text, warn) {
+    if (!status) return;
+    status.textContent = text || "";
+    status.classList.toggle("is-warn", !!warn);
+  }
+  btn.addEventListener("click", async (ev) => {
+    ev.preventDefault();
+    btn.setAttribute("disabled", "true");
+    setStatus("Exporting CSV…", false);
+    try {
+      const [tabs, accessedResp, countsResp, sparkResp, openedResp] = await Promise.all([
+        getAllTabs(),
+        sendMessage(MSG.GET_LAST_ACCESSED),
+        sendMessage(MSG.GET_ACTIVATION_COUNTS),
+        sendMessage(MSG.GET_ACTIVITY_SPARK),
+        sendMessage(MSG.GET_FIRST_OPENED),
+      ]);
+      const rows = buildRows(
+        tabs,
+        accessedResp?.map || {},
+        countsResp?.map || {},
+        sparkResp?.map || {},
+        openedResp?.map || {},
+      );
+      const now = Date.now();
+      const csv = buildUsageCsv(rows, now);
+      const stamp = new Date(now).toISOString().replace(/[:.]/g, "-").replace("Z", "");
+      const filename = `tab-heatmap-usage-${stamp}.csv`;
+      downloadText(filename, csv, "text/csv;charset=utf-8");
+      setStatus(`Exported ${rows.length} tab${rows.length === 1 ? "" : "s"} to CSV`, false);
+    } catch (err) {
+      console.warn(LOG, "csv export failed:", err);
+      setStatus("CSV export failed", true);
+    } finally {
+      btn.removeAttribute("disabled");
+    }
+  });
+}
+
 /**
  * Parse and validate a Tab Heatmap snapshot JSON blob.
  * Throws on schema mismatch so the caller can surface a friendly error.
@@ -2339,6 +2452,7 @@ wireCloseIdle().catch((err) => console.warn(LOG, "wireCloseIdle failed:", err));
 wireSuspendIdle().catch((err) => console.warn(LOG, "wireSuspendIdle failed:", err));
 wireCopyColdUrls().catch((err) => console.warn(LOG, "wireCopyColdUrls failed:", err));
 wireExport().catch((err) => console.warn(LOG, "wireExport failed:", err));
+wireCsvExport().catch((err) => console.warn(LOG, "wireCsvExport failed:", err));
 wireImport().catch((err) => console.warn(LOG, "wireImport failed:", err));
 wireSaveSession().catch((err) => console.warn(LOG, "wireSaveSession failed:", err));
 wireRestoreSession().catch((err) => console.warn(LOG, "wireRestoreSession failed:", err));
@@ -2846,4 +2960,4 @@ async function wireGroupFilter() {
 }
 
 // Expose for unit-style smoke tests in a non-extension runtime.
-export { buildRows, recencyScore, frequencyScore, heatColor, groupRowsByHost, buildSnapshot, parseSnapshot, buildSessionSnapshot, parseSessionSnapshot, rowMatchesFilter, normalizeQuery, sortRows, sortGroups, formatRelativeTime, formatAbsoluteTime, formatCompactAge, formatAbsoluteAgo, bucketizeActivity, sparkPath, renderSparkSVG, computeHeatTrend, renderTrendSVG, buildHeatHistogram, HIST_BUCKETS, renderHeatMinimap, applyGroupFilter, tabGroupColorCss, collectColdTabs, writeClipboardText, countColdCandidates, countPinHotCandidates };
+export { buildRows, recencyScore, frequencyScore, heatColor, groupRowsByHost, buildSnapshot, parseSnapshot, buildSessionSnapshot, parseSessionSnapshot, rowMatchesFilter, normalizeQuery, sortRows, sortGroups, formatRelativeTime, formatAbsoluteTime, formatCompactAge, formatAbsoluteAgo, bucketizeActivity, sparkPath, renderSparkSVG, computeHeatTrend, renderTrendSVG, buildHeatHistogram, HIST_BUCKETS, renderHeatMinimap, applyGroupFilter, tabGroupColorCss, collectColdTabs, writeClipboardText, countColdCandidates, countPinHotCandidates, buildUsageCsv, csvEscape };
