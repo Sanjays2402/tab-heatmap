@@ -42,7 +42,7 @@ This file is the agent's task queue. Unchecked items get implemented in order. W
 - [x] Auto-suspend rule: discard tabs cold for > configurable hours
 - [x] Tab clustering: group similar-domain tabs into collapsible sections
 - [x] CSV export of tab usage stats over time
-- [ ] Weekly digest view: top 10 hottest and coldest tabs of the week
+- [x] Weekly digest view: top 10 hottest and coldest tabs of the week
 - [ ] Drag-to-reorder tab priority within popup
 - [ ] Focus mode: dim all tabs except the top-N hottest
 - [ ] Custom accent color picker in options page

@@ -202,6 +202,15 @@
         <span class="action-label">Restore session</span>
       </button>
       <input id="restore-session-file" type="file" accept="application/json,.json" hidden>
+      <button id="digest-btn" class="action-btn action-btn--ghost" type="button" title="Weekly digest: top 10 hottest and coldest tabs of the week" aria-haspopup="dialog">
+        <svg class="action-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M4 5h16"/>
+          <path d="M4 12h10"/>
+          <path d="M4 19h7"/>
+          <path d="M17 14l2 2 4-4"/>
+        </svg>
+        <span class="action-label">Digest</span>
+      </button>
       <button id="csv-export-btn" class="action-btn action-btn--ghost" type="button" title="Export tab usage stats over time as CSV">
         <svg class="action-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8z"/>
@@ -308,6 +317,48 @@
       </svg>
       <p class="empty-title">No tabs to chart</p>
       <p class="empty-sub">Open a few tabs and they'll heat up here.</p>
+    </div>
+    <div id="digest-modal" class="digest-modal hidden" role="dialog" aria-modal="true" aria-labelledby="digest-title" aria-hidden="true">
+      <div class="digest-backdrop" data-digest-dismiss aria-hidden="true"></div>
+      <div class="digest-card" role="document">
+        <header class="digest-head">
+          <div class="digest-title-wrap">
+            <svg class="digest-title-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M4 5h16"/><path d="M4 12h10"/><path d="M4 19h7"/><path d="M17 14l2 2 4-4"/>
+            </svg>
+            <h2 id="digest-title" class="digest-title">Weekly digest</h2>
+            <span id="digest-window" class="digest-window">last 7 days</span>
+          </div>
+          <button id="digest-close" class="icon-btn" type="button" title="Close (Esc)" aria-label="Close digest" data-digest-dismiss>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M6 6l12 12M18 6L6 18"/>
+            </svg>
+          </button>
+        </header>
+        <section class="digest-section" aria-labelledby="digest-hot-label">
+          <div class="digest-section-head">
+            <svg class="digest-section-icon digest-section-icon--hot" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 3c3 3 5 5.4 5 8.2a5 5 0 11-10 0C7 8.4 9 6 12 3z"/>
+              <path d="M12 17a2.2 2.2 0 002.2-2.2"/>
+            </svg>
+            <h3 id="digest-hot-label" class="digest-section-title">Top 10 hottest</h3>
+            <span id="digest-hot-meta" class="digest-section-meta"></span>
+          </div>
+          <ol id="digest-hot-list" class="digest-list"></ol>
+          <p id="digest-hot-empty" class="digest-empty hidden">No tabs were active this week.</p>
+        </section>
+        <section class="digest-section" aria-labelledby="digest-cold-label">
+          <div class="digest-section-head">
+            <svg class="digest-section-icon digest-section-icon--cold" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 3v18"/><path d="M5 7l7-4 7 4"/><path d="M5 17l7 4 7-4"/><path d="M3 12h18"/>
+            </svg>
+            <h3 id="digest-cold-label" class="digest-section-title">Top 10 coldest</h3>
+            <span id="digest-cold-meta" class="digest-section-meta"></span>
+          </div>
+          <ol id="digest-cold-list" class="digest-list"></ol>
+          <p id="digest-cold-empty" class="digest-empty hidden">No cold tabs — everything's been touched recently.</p>
+        </section>
+      </div>
     </div>
   </main>
   <footer class="footer">

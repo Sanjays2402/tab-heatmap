@@ -2288,6 +2288,184 @@ async function wireRestoreSession() {
   });
 }
 
+/* --- Weekly digest -------------------------------------------------------
+ * Modal that surfaces the top 10 hottest and top 10 coldest tabs over the
+ * last 7 days. "Hot" rank uses the existing live heat score (recency ×
+ * frequency) blended with how many sparkline activations the tab has logged
+ * in the rolling 24h × 7 sample. "Cold" rank promotes tabs that have been
+ * idle the longest, ignoring pinned tabs (they’re intentionally excluded
+ * from cold-close everywhere, so they shouldn’t appear here either).
+ */
+const DIGEST_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const DIGEST_TOP_N = 10;
+
+function digestHotScore(row) {
+  const heat = Number.isFinite(row.heat) ? row.heat : 0;
+  const samples = Array.isArray(row.sparkSamples) ? row.sparkSamples.length : 0;
+  return heat + Math.min(samples, 24) * 0.005;
+}
+
+function digestColdScore(row, now) {
+  const stamp = Number.isFinite(row.lastAccessed) && row.lastAccessed > 0
+    ? row.lastAccessed
+    : (Number.isFinite(row.firstOpened) && row.firstOpened > 0 ? row.firstOpened : 0);
+  if (!stamp) return -1;
+  return Math.max(0, now - stamp);
+}
+
+function buildDigestRow(row, idx, kind, now) {
+  const li = document.createElement("li");
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "digest-row";
+  btn.dataset.tabId = String(row.id);
+  btn.dataset.windowId = String(row.windowId);
+  btn.title = row.title || row.url || "";
+
+  const rank = document.createElement("span");
+  rank.className = "digest-rank";
+  rank.textContent = String(idx + 1);
+
+  const dot = document.createElement("span");
+  dot.className = "digest-dot";
+  dot.style.background = heatColor(row.heat || 0);
+
+  const body = document.createElement("span");
+  body.className = "digest-body";
+  const title = document.createElement("span");
+  title.className = "digest-row-title";
+  title.textContent = row.title || row.url || "Untitled";
+  const sub = document.createElement("span");
+  sub.className = "digest-row-sub";
+  const host = hostnameOf(row.url) || (row.url ? row.url.slice(0, 48) : "");
+  sub.textContent = host;
+  body.appendChild(title);
+  body.appendChild(sub);
+
+  const stat = document.createElement("span");
+  stat.className = "digest-row-stat";
+  if (kind === "hot") {
+    const pct = Math.round((Number.isFinite(row.heat) ? row.heat : 0) * 100);
+    const acts = row.activations || 0;
+    stat.textContent = `${pct}% · ${acts}×`;
+    stat.title = `Heat ${pct}% · ${acts} activation${acts === 1 ? "" : "s"}`;
+  } else {
+    const age = digestColdScore(row, now);
+    stat.textContent = age > 0 ? formatCompactAge(age) : "new";
+    stat.title = age > 0 ? `Idle ${formatAbsoluteAgo(age)}` : "No recorded activity yet";
+  }
+
+  btn.appendChild(rank);
+  btn.appendChild(dot);
+  btn.appendChild(body);
+  btn.appendChild(stat);
+  btn.addEventListener("click", async () => {
+    await focusTab(row.id, row.windowId);
+    closeDigest();
+  });
+  li.appendChild(btn);
+  return li;
+}
+
+async function openDigest() {
+  const modal = document.getElementById("digest-modal");
+  if (!modal) return;
+  const [tabs, accessedResp, countsResp, sparkResp, openedResp] = await Promise.all([
+    getAllTabs(),
+    sendMessage(MSG.GET_LAST_ACCESSED),
+    sendMessage(MSG.GET_ACTIVATION_COUNTS),
+    sendMessage(MSG.GET_ACTIVITY_SPARK),
+    sendMessage(MSG.GET_FIRST_OPENED),
+  ]);
+  const rows = buildRows(
+    tabs,
+    accessedResp?.map || {},
+    countsResp?.map || {},
+    sparkResp?.map || {},
+    openedResp?.map || {}
+  );
+  const now = Date.now();
+
+  // Hot pool: exclude pinned (they’re always sticky) and tabs that have
+  // literally never been touched and carry zero heat.
+  const hotPool = rows.filter((r) => !r.pinned && (r.activations > 0 || r.heat > 0));
+  const hot = hotPool
+    .slice()
+    .sort((a, b) => digestHotScore(b) - digestHotScore(a))
+    .slice(0, DIGEST_TOP_N);
+
+  // Cold pool: idle longer than 5 minutes, excluding pinned.
+  const minIdleMs = 5 * 60 * 1000;
+  const coldPool = rows.filter((r) => {
+    if (r.pinned) return false;
+    const age = digestColdScore(r, now);
+    return age > minIdleMs;
+  });
+  const cold = coldPool
+    .slice()
+    .sort((a, b) => digestColdScore(b, now) - digestColdScore(a, now))
+    .slice(0, DIGEST_TOP_N);
+
+  const hotList = document.getElementById("digest-hot-list");
+  const coldList = document.getElementById("digest-cold-list");
+  const hotEmpty = document.getElementById("digest-hot-empty");
+  const coldEmpty = document.getElementById("digest-cold-empty");
+  const hotMeta = document.getElementById("digest-hot-meta");
+  const coldMeta = document.getElementById("digest-cold-meta");
+  const winEl = document.getElementById("digest-window");
+
+  if (hotList) {
+    hotList.innerHTML = "";
+    hot.forEach((r, i) => hotList.appendChild(buildDigestRow(r, i, "hot", now)));
+  }
+  if (coldList) {
+    coldList.innerHTML = "";
+    cold.forEach((r, i) => coldList.appendChild(buildDigestRow(r, i, "cold", now)));
+  }
+  if (hotEmpty) hotEmpty.classList.toggle("hidden", hot.length > 0);
+  if (coldEmpty) coldEmpty.classList.toggle("hidden", cold.length > 0);
+  if (hotMeta) hotMeta.textContent = hot.length ? `${hot.length} of ${hotPool.length}` : "";
+  if (coldMeta) coldMeta.textContent = cold.length ? `${cold.length} of ${coldPool.length}` : "";
+  if (winEl) winEl.textContent = `last 7 days · ${rows.length} tab${rows.length === 1 ? "" : "s"}`;
+
+  modal.classList.remove("hidden");
+  modal.setAttribute("aria-hidden", "false");
+  setTimeout(() => {
+    try { document.getElementById("digest-close")?.focus(); } catch {}
+  }, 30);
+}
+
+function closeDigest() {
+  const modal = document.getElementById("digest-modal");
+  if (!modal || modal.classList.contains("hidden")) return;
+  modal.classList.add("hidden");
+  modal.setAttribute("aria-hidden", "true");
+  try { document.getElementById("digest-btn")?.focus(); } catch {}
+}
+
+function wireDigest() {
+  const openBtn = document.getElementById("digest-btn");
+  const modal = document.getElementById("digest-modal");
+  if (!openBtn || !modal) return;
+  openBtn.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    openDigest().catch((err) => console.warn(LOG, "openDigest failed:", err));
+  });
+  modal.addEventListener("click", (ev) => {
+    const t = ev.target;
+    if (t instanceof Element && t.closest("[data-digest-dismiss]")) {
+      ev.preventDefault();
+      closeDigest();
+    }
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && !modal.classList.contains("hidden")) {
+      ev.preventDefault();
+      closeDigest();
+    }
+  });
+}
+
 /** Wire the "Hottest" button: asks the SW to focus the hottest tab. */
 function wireJumpHottest() {
   const btn = document.getElementById("jump-hottest-btn");
@@ -2457,6 +2635,7 @@ wireImport().catch((err) => console.warn(LOG, "wireImport failed:", err));
 wireSaveSession().catch((err) => console.warn(LOG, "wireSaveSession failed:", err));
 wireRestoreSession().catch((err) => console.warn(LOG, "wireRestoreSession failed:", err));
 wireQuickChips().catch((err) => console.warn(LOG, "wireQuickChips failed:", err));
+wireDigest();
 wireJumpHottest();
 wireSearch();
 wireBulkSelect();
