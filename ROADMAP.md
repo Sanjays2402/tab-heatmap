@@ -47,3 +47,13 @@ This file is the agent's task queue. Unchecked items get implemented in order. W
 - [x] Focus mode: dim all tabs except the top-N hottest
 - [x] Custom accent color picker in options page
 - [x] Onboarding tour: first-run highlight of popup features
+- [ ] Heatmap timeline scrubber: replay last 24h of tab activity
+- [ ] Per-tab notes: pin a short memo to any tab visible on hover
+- [ ] Smart suggestions panel: 'You might want to close these' with reasons
+- [ ] Bookmark cold tabs into a dated folder before closing
+- [ ] Tab forecast: predicted hours until each tab goes cold
+- [ ] Quiet hours: pause auto-suspend during configurable time windows
+- [ ] Compact mode toggle: dense one-line tab rows in popup
+- [ ] Per-window settings: independent thresholds per browser window
+- [ ] Activity sound mute: bulk mute all noisy cold tabs
+- [ ] Stats dashboard route: full-page analytics view opened from popup
