@@ -135,6 +135,46 @@
       </div>
     </section>
 
+    <section class="card" aria-labelledby="accent-h">
+      <div class="card-head">
+        <svg class="card-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="13.5" cy="6.5" r="1.5"/>
+          <circle cx="17.5" cy="10.5" r="1.5"/>
+          <circle cx="8.5" cy="7.5" r="1.5"/>
+          <circle cx="6.5" cy="12.5" r="1.5"/>
+          <path d="M12 3a9 9 0 100 18 1.5 1.5 0 001-2.6 1.5 1.5 0 011-2.6h1.5A4.5 4.5 0 0020 11.5C20 6.8 16.4 3 12 3z"/>
+        </svg>
+        <div>
+          <h2 id="accent-h" class="card-title">Accent color</h2>
+          <p class="card-sub">Tints highlights, focus rings, and the ambient glow. Pick a preset or paste a custom hex.</p>
+        </div>
+      </div>
+      <div class="control">
+        <div id="accent-swatches" class="accent-swatches" role="radiogroup" aria-label="Accent presets">
+          <button type="button" class="swatch" role="radio" aria-checked="true" data-accent="#ff7a3d" style="--sw:#ff7a3d" title="Ember"><span class="sw-dot"></span><span class="sw-name">Ember</span></button>
+          <button type="button" class="swatch" role="radio" aria-checked="false" data-accent="#ef4444" style="--sw:#ef4444" title="Crimson"><span class="sw-dot"></span><span class="sw-name">Crimson</span></button>
+          <button type="button" class="swatch" role="radio" aria-checked="false" data-accent="#f59e0b" style="--sw:#f59e0b" title="Amber"><span class="sw-dot"></span><span class="sw-name">Amber</span></button>
+          <button type="button" class="swatch" role="radio" aria-checked="false" data-accent="#10b981" style="--sw:#10b981" title="Emerald"><span class="sw-dot"></span><span class="sw-name">Emerald</span></button>
+          <button type="button" class="swatch" role="radio" aria-checked="false" data-accent="#06b6d4" style="--sw:#06b6d4" title="Cyan"><span class="sw-dot"></span><span class="sw-name">Cyan</span></button>
+          <button type="button" class="swatch" role="radio" aria-checked="false" data-accent="#3b82f6" style="--sw:#3b82f6" title="Azure"><span class="sw-dot"></span><span class="sw-name">Azure</span></button>
+          <button type="button" class="swatch" role="radio" aria-checked="false" data-accent="#8b5cf6" style="--sw:#8b5cf6" title="Violet"><span class="sw-dot"></span><span class="sw-name">Violet</span></button>
+          <button type="button" class="swatch" role="radio" aria-checked="false" data-accent="#ec4899" style="--sw:#ec4899" title="Rose"><span class="sw-dot"></span><span class="sw-name">Rose</span></button>
+        </div>
+        <div class="control-row accent-custom">
+          <label for="accent-input" class="unit">Custom</label>
+          <input id="accent-picker" type="color" value="#ff7a3d" aria-label="Custom accent color picker">
+          <input id="accent-input" type="text" value="#ff7a3d" maxlength="7" spellcheck="false" autocomplete="off" inputmode="text" aria-label="Accent hex value">
+          <button id="accent-reset" type="button" class="btn btn-ghost" aria-label="Reset accent to default">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M3 12a9 9 0 1015-6.7L21 8"/>
+              <path d="M21 3v5h-5"/>
+            </svg>
+            <span>Reset</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
     <section class="card" aria-labelledby="theme-h">
       <div class="card-head">
         <svg class="card-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">

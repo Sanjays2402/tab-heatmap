@@ -20,9 +20,34 @@ const DEFAULTS = Object.freeze({
   dailySummaryHour: 9,
   autoSuspendEnabled: false,
   autoSuspendHours: 24,
+  accentColor: "#ff7a3d",
 });
 
 const VALID_THEMES = new Set(["auto", "light", "dark"]);
+
+const DEFAULT_ACCENT = "#ff7a3d";
+
+/** Normalize an accent input → canonical lowercase 6-digit hex, or "" on miss. */
+function sanitizeHex(input) {
+  if (typeof input !== "string") return "";
+  const s = input.trim().toLowerCase();
+  if (/^#[0-9a-f]{6}$/.test(s)) return s;
+  if (/^#[0-9a-f]{3}$/.test(s)) return "#" + s[1] + s[1] + s[2] + s[2] + s[3] + s[3];
+  return "";
+}
+
+/** Apply the chosen accent to the document (CSS vars), live-preview style. */
+function applyAccent(hex) {
+  const c = sanitizeHex(hex) || DEFAULT_ACCENT;
+  try {
+    document.documentElement.style.setProperty("--accent", c);
+    // Derive a soft variant (~18% alpha) from the rgb.
+    const r = parseInt(c.slice(1, 3), 16);
+    const g = parseInt(c.slice(3, 5), 16);
+    const b = parseInt(c.slice(5, 7), 16);
+    document.documentElement.style.setProperty("--accent-soft", `rgba(${r}, ${g}, ${b}, 0.18)`);
+  } catch { /* noop */ }
+}
 
 const LIMITS = Object.freeze({
   idleCloseDays: { min: 1, max: 365 },
@@ -203,6 +228,7 @@ function wireWhitelistAdd() {
 
 /** Current theme preference in the form ("auto"|"light"|"dark"). */
 let themePref = "auto";
+let accentColor = DEFAULT_ACCENT;
 let THEME_MEDIA = null;
 let THEME_LISTENER = null;
 
@@ -334,6 +360,71 @@ function wireDomainAdd() {
   minsEl.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); add(); } });
 }
 
+function renderAccentSwatches() {
+  const root = document.getElementById("accent-swatches");
+  if (root) {
+    for (const btn of root.querySelectorAll(".swatch")) {
+      const on = sanitizeHex(btn.dataset.accent) === accentColor;
+      btn.setAttribute("aria-checked", on ? "true" : "false");
+    }
+  }
+  const picker = document.getElementById("accent-picker");
+  const input = document.getElementById("accent-input");
+  if (picker) picker.value = accentColor;
+  if (input && document.activeElement !== input) input.value = accentColor;
+}
+
+function wireAccentPicker() {
+  const swatches = document.getElementById("accent-swatches");
+  const picker = document.getElementById("accent-picker");
+  const input = document.getElementById("accent-input");
+  const reset = document.getElementById("accent-reset");
+  if (swatches) {
+    swatches.addEventListener("click", (ev) => {
+      const btn = ev.target instanceof Element ? ev.target.closest(".swatch") : null;
+      if (!btn) return;
+      const next = sanitizeHex(btn.dataset.accent);
+      if (!next || next === accentColor) return;
+      accentColor = next;
+      applyAccent(accentColor);
+      renderAccentSwatches();
+      markDirty();
+    });
+  }
+  if (picker) {
+    picker.addEventListener("input", () => {
+      const next = sanitizeHex(picker.value);
+      if (!next) return;
+      accentColor = next;
+      applyAccent(accentColor);
+      renderAccentSwatches();
+      markDirty();
+    });
+  }
+  if (input) {
+    const commit = () => {
+      const next = sanitizeHex(input.value);
+      if (!next) { input.value = accentColor; setStatus("Enter a hex like #ff7a3d", "warn"); return; }
+      if (next === accentColor) { input.value = accentColor; return; }
+      accentColor = next;
+      applyAccent(accentColor);
+      renderAccentSwatches();
+      markDirty();
+    };
+    input.addEventListener("blur", commit);
+    input.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); commit(); } });
+  }
+  if (reset) {
+    reset.addEventListener("click", () => {
+      if (accentColor === DEFAULT_ACCENT) return;
+      accentColor = DEFAULT_ACCENT;
+      applyAccent(accentColor);
+      renderAccentSwatches();
+      markDirty();
+    });
+  }
+}
+
 function readForm() {
   const dailyEl = document.getElementById("daily-enabled");
   const hourEl = document.getElementById("daily-hour");
@@ -350,6 +441,7 @@ function readForm() {
     dailySummaryHour: clamp(hourEl?.value, 0, 23, DEFAULTS.dailySummaryHour),
     autoSuspendEnabled: autoEl ? !!autoEl.checked : DEFAULTS.autoSuspendEnabled,
     autoSuspendHours: clamp(autoHoursEl?.value, 1, 720, DEFAULTS.autoSuspendHours),
+    accentColor: sanitizeHex(accentColor) || DEFAULT_ACCENT,
   };
 }
 
@@ -370,6 +462,9 @@ function writeForm(s) {
   const autoHoursEl = document.getElementById("autosuspend-hours");
   if (autoEl) autoEl.checked = s.autoSuspendEnabled === true;
   if (autoHoursEl) autoHoursEl.value = String(clamp(s.autoSuspendHours, 1, 720, DEFAULTS.autoSuspendHours));
+  accentColor = sanitizeHex(s.accentColor) || DEFAULT_ACCENT;
+  applyAccent(accentColor);
+  renderAccentSwatches();
   applyTheme(themePref);
   renderThemeSeg();
   renderDomainList();
@@ -389,6 +484,7 @@ function markDirty() {
     cur.dailySummaryHour !== (initial.dailySummaryHour ?? DEFAULTS.dailySummaryHour) ||
     cur.autoSuspendEnabled !== (initial.autoSuspendEnabled === true) ||
     cur.autoSuspendHours !== (initial.autoSuspendHours ?? DEFAULTS.autoSuspendHours) ||
+    cur.accentColor !== (sanitizeHex(initial.accentColor) || DEFAULT_ACCENT) ||
     !sameDomain ||
     !sameWhitelist;
   setStatus(changed ? "Unsaved changes" : "", changed ? "warn" : "");
@@ -408,6 +504,7 @@ async function load() {
     dailySummaryHour: clamp(s.dailySummaryHour, 0, 23, DEFAULTS.dailySummaryHour),
     autoSuspendEnabled: s.autoSuspendEnabled === true,
     autoSuspendHours: clamp(s.autoSuspendHours, 1, 720, DEFAULTS.autoSuspendHours),
+    accentColor: sanitizeHex(s.accentColor) || DEFAULT_ACCENT,
   };
   writeForm(initial);
   setStatus("", "");
@@ -431,6 +528,7 @@ async function save() {
       dailySummaryHour: clamp(resp.settings.dailySummaryHour, 0, 23, DEFAULTS.dailySummaryHour),
       autoSuspendEnabled: resp.settings.autoSuspendEnabled === true,
       autoSuspendHours: clamp(resp.settings.autoSuspendHours, 1, 720, DEFAULTS.autoSuspendHours),
+      accentColor: sanitizeHex(resp.settings.accentColor) || DEFAULT_ACCENT,
     };
     writeForm(initial);
     setStatus("Saved", "ok");
@@ -502,6 +600,7 @@ els.reset?.addEventListener("click", resetDefaults);
 wireDomainAdd();
 wireWhitelistAdd();
 wireThemeSeg();
+wireAccentPicker();
 wireResetHeatData();
 document.getElementById("daily-enabled")?.addEventListener("change", markDirty);
 document.getElementById("daily-hour")?.addEventListener("input", markDirty);
@@ -523,4 +622,4 @@ document.getElementById("autosuspend-hours")?.addEventListener("blur", (ev) => {
 load().catch((err) => { console.warn(LOG, "load failed:", err); setStatus("Failed to load settings", "warn"); });
 
 // Exposed for smoke testing in non-extension runtimes.
-export { clamp, readForm, writeForm, DEFAULTS, LIMITS, normalizeHost, isValidHost, VALID_THEMES, sanitizeWhitelist };
+export { clamp, readForm, writeForm, DEFAULTS, LIMITS, normalizeHost, isValidHost, VALID_THEMES, sanitizeWhitelist, sanitizeHex, applyAccent, DEFAULT_ACCENT };

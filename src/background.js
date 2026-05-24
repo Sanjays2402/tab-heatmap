@@ -46,9 +46,23 @@ const DEFAULT_SETTINGS = Object.freeze({
   // manual suspend path (pinned, active, audible, whitelisted, no signal).
   autoSuspendEnabled: false,
   autoSuspendHours: 24,
+  // Custom accent color (CSS hex) used for the liquid-glass chrome. Empty
+  // string or invalid input falls back to the extension's signature accent.
+  accentColor: "#ff7a3d",
 });
 
 const VALID_THEMES = new Set(["auto", "light", "dark"]);
+
+/** Validate + normalize a CSS hex color (#rgb / #rrggbb). Returns "" on miss. */
+function sanitizeHex(input) {
+  if (typeof input !== "string") return "";
+  const s = input.trim().toLowerCase();
+  if (/^#[0-9a-f]{6}$/.test(s)) return s;
+  if (/^#[0-9a-f]{3}$/.test(s)) {
+    return "#" + s[1] + s[1] + s[2] + s[2] + s[3] + s[3];
+  }
+  return "";
+}
 
 /** Lowercase + strip leading www. so user input "WWW.GitHub.com" matches "github.com". */
 function normalizeHost(h) {
@@ -107,6 +121,7 @@ async function readSettings() {
     // Range: 1h .. 720h (30 days). Sub-hour discards would thrash; >30d is
     // close-territory, not suspend-territory.
     merged.autoSuspendHours = Number.isFinite(ah) && ah >= 1 ? Math.min(720, Math.max(1, Math.round(ah))) : DEFAULT_SETTINGS.autoSuspendHours;
+    merged.accentColor = sanitizeHex(merged.accentColor) || DEFAULT_SETTINGS.accentColor;
     return merged;
   } catch (err) {
     console.warn(LOG_PREFIX, "readSettings failed:", err);

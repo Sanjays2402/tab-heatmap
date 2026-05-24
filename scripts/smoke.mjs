@@ -94,3 +94,30 @@ if (!/\.tab-age\b/.test(popupCss)) {
   process.exit(1);
 }
 
+// Custom accent color picker in options. The setting must round-trip through
+// the background, the options page must expose swatches + a hex input, and
+// the popup must apply the chosen accent at load time.
+const optionsHtml = fs.readFileSync("src/options.html", "utf8");
+const optionsJs = fs.readFileSync("src/options.js", "utf8");
+const optionsCss = fs.readFileSync("src/options.css", "utf8");
+if (!/accentColor:/.test(bg) || !/sanitizeHex/.test(bg)) {
+  console.error("background.js must persist accentColor with hex sanitization");
+  process.exit(1);
+}
+if (!/id="accent-swatches"/.test(optionsHtml) || !/id="accent-picker"/.test(optionsHtml) || !/id="accent-input"/.test(optionsHtml)) {
+  console.error("options.html must include accent swatches, color picker, and hex input");
+  process.exit(1);
+}
+if (!/wireAccentPicker/.test(optionsJs) || !/applyAccent/.test(optionsJs) || !/sanitizeHex/.test(optionsJs)) {
+  console.error("options.js must wire the accent picker and live-apply it");
+  process.exit(1);
+}
+if (!/\.accent-swatches\b/.test(optionsCss) || !/\.swatch\b/.test(optionsCss)) {
+  console.error("options.css must style .accent-swatches and .swatch");
+  process.exit(1);
+}
+if (!/applyAccent\(settings\.accentColor\)/.test(popupJs)) {
+  console.error("popup.js must apply the saved accentColor at load");
+  process.exit(1);
+}
+

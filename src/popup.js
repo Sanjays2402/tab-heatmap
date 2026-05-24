@@ -51,6 +51,25 @@ function halfLifeForUrl(url) {
  * If `preference` is 'light' or 'dark', force it. Otherwise auto-follow OS
  * and subscribe to changes for the lifetime of the popup.
  */
+function sanitizeHex(input) {
+  if (typeof input !== "string") return "";
+  const s = input.trim().toLowerCase();
+  if (/^#[0-9a-f]{6}$/.test(s)) return s;
+  if (/^#[0-9a-f]{3}$/.test(s)) return "#" + s[1] + s[1] + s[2] + s[2] + s[3] + s[3];
+  return "";
+}
+function applyAccent(hex) {
+  const c = sanitizeHex(hex);
+  if (!c) return; // fall back to stylesheet default
+  try {
+    document.documentElement.style.setProperty("--accent", c);
+    const r = parseInt(c.slice(1, 3), 16);
+    const g = parseInt(c.slice(3, 5), 16);
+    const b = parseInt(c.slice(5, 7), 16);
+    document.documentElement.style.setProperty("--accent-soft", `rgba(${r}, ${g}, ${b}, 0.18)`);
+  } catch { /* noop */ }
+}
+
 let THEME_MEDIA = null;
 let THEME_LISTENER = null;
 function applyTheme(preference) {
@@ -1099,6 +1118,7 @@ async function render() {
   DOMAIN_HALF_LIFE = (settings.domainHalfLifeMinutes && typeof settings.domainHalfLifeMinutes === "object")
     ? settings.domainHalfLifeMinutes
     : {};
+  applyAccent(settings.accentColor);
   applyTheme(settings.theme);
 
   // Hydrate tab-group metadata so we can render the group filter and color

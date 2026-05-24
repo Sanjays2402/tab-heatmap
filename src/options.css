@@ -496,3 +496,74 @@ input[type="range"]::-moz-range-thumb {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
+
+/* Accent color picker */
+.accent-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.swatch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px 6px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--glass-hi);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  transition: border-color 180ms var(--ease), background 180ms var(--ease), transform 180ms var(--ease), box-shadow 180ms var(--ease);
+}
+.swatch:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in oklab, var(--sw, var(--accent)) 50%, var(--line));
+}
+.swatch[aria-checked="true"] {
+  border-color: color-mix(in oklab, var(--sw, var(--accent)) 70%, var(--line));
+  background:
+    linear-gradient(135deg, color-mix(in oklab, var(--sw, var(--accent)) 18%, transparent), transparent 60%),
+    var(--glass-hi);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--sw, var(--accent)) 35%, transparent);
+}
+.swatch:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--sw, var(--accent)) 60%, transparent);
+  outline-offset: 2px;
+}
+.swatch .sw-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--sw, var(--accent));
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.18),
+    0 0 8px color-mix(in oklab, var(--sw, var(--accent)) 55%, transparent);
+}
+.swatch .sw-name { white-space: nowrap; }
+
+.accent-custom {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+#accent-picker {
+  width: 36px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--glass-hi);
+  cursor: pointer;
+}
+#accent-picker::-webkit-color-swatch-wrapper { padding: 2px; }
+#accent-picker::-webkit-color-swatch { border: none; border-radius: 6px; }
+#accent-input {
+  width: 100px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-transform: lowercase;
+}
