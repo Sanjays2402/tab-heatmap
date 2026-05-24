@@ -249,6 +249,57 @@ function hostnameOf(url) {
   catch { return ""; }
 }
 
+// Two-label suffixes we want to keep together when computing eTLD+1
+// (so `bbc.co.uk` clusters as `bbc.co.uk`, not `co.uk`). This is a
+// pragmatic heuristic, not a full Public Suffix List — good enough for
+// tab clustering and ships zero network calls.
+const MULTILABEL_SUFFIXES = new Set([
+  "co.uk","ac.uk","gov.uk","org.uk","me.uk","net.uk","sch.uk",
+  "com.au","net.au","org.au","edu.au","gov.au",
+  "co.jp","ne.jp","or.jp","ac.jp","go.jp",
+  "co.in","net.in","org.in","gov.in","ac.in",
+  "com.br","net.br","org.br","gov.br",
+  "co.nz","net.nz","org.nz","govt.nz",
+  "co.kr","or.kr",
+  "co.za","org.za",
+  "com.mx","com.ar","com.tr","com.sg","com.hk","com.tw",
+  "com.cn","net.cn","org.cn","gov.cn","ac.cn"
+]);
+
+/**
+ * Compute a registrable-domain-like cluster key from a URL.
+ * Examples:
+ *   mail.google.com  → google.com
+ *   docs.google.com  → google.com
+ *   foo.bar.bbc.co.uk → bbc.co.uk
+ *   localhost / file: → (local)
+ *   1.2.3.4 (IP)     → 1.2.3.4
+ *   chrome://...     → chrome (scheme bucket)
+ */
+function clusterKeyOf(url) {
+  if (!url || typeof url !== "string") return "(local)";
+  let u;
+  try { u = new URL(url); } catch { return "(local)"; }
+  const proto = u.protocol.replace(/:$/, "");
+  if (proto && proto !== "http" && proto !== "https" && proto !== "ftp" && proto !== "ws" && proto !== "wss") {
+    // chrome:, edge:, about:, file:, view-source:, etc.
+    return proto || "(local)";
+  }
+  let host = u.hostname.replace(/^www\./, "");
+  if (!host) return "(local)";
+  // IPv4 / IPv6 → cluster as-is.
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(host) || host.includes(":")) return host;
+  // Single-label hosts (localhost, intranet boxes) cluster as-is.
+  if (!host.includes(".")) return host;
+  const parts = host.split(".");
+  if (parts.length <= 2) return host;
+  const lastTwo = parts.slice(-2).join(".");
+  if (MULTILABEL_SUFFIXES.has(lastTwo) && parts.length >= 3) {
+    return parts.slice(-3).join(".");
+  }
+  return lastTwo;
+}
+
 /** Inline SVG fallback for tabs without a favicon (Phosphor-ish globe). */
 function fallbackFaviconSVG() {
   return (
@@ -847,10 +898,11 @@ async function focusTab(tabId, windowId) {
  * avg + sum for UI subtitles. Children stay sorted hot→cold.
  * Returns groups sorted by rollup heat (hot hosts at top).
  */
-function groupRowsByHost(rows) {
+function groupRowsByHost(rows, keyFn) {
+  const getKey = typeof keyFn === "function" ? keyFn : (r) => hostnameOf(r.url) || "(local)";
   const map = new Map();
   for (const row of rows) {
-    const host = hostnameOf(row.url) || "(local)";
+    const host = getKey(row) || "(local)";
     let g = map.get(host);
     if (!g) {
       g = { host, rows: [], maxHeat: 0, sumHeat: 0, sumRecency: 0, sumFreq: 0, activations: 0 };
@@ -877,7 +929,7 @@ function groupRowsByHost(rows) {
 }
 
 /** Render a single host-group header + its children into `parent`. */
-function appendGroup(parent, group, expanded) {
+function appendGroup(parent, group, expanded, storagePrefix) {
   const section = document.createElement("li");
   section.className = "tab-group" + (expanded ? " is-open" : "");
   section.dataset.host = group.host;
@@ -911,7 +963,7 @@ function appendGroup(parent, group, expanded) {
     header.setAttribute("aria-expanded", open ? "true" : "false");
     // Persist per-host collapsed state best-effort.
     try {
-      const key = "th:groupOpen:" + group.host;
+      const key = (storagePrefix || "th:groupOpen:") + group.host;
       chrome.storage?.local?.set?.({ [key]: open });
     } catch {}
   });
@@ -994,9 +1046,11 @@ async function render() {
   list.classList.remove("hidden");
 
   const frag = document.createDocumentFragment();
-  if (GROUP_BY_HOST) {
+  if (GROUP_BY_HOST || CLUSTER_BY_DOMAIN) {
     list.classList.add("is-grouped");
-    const groups = sortGroups(groupRowsByHost(filtered), SORT_MODE);
+    if (CLUSTER_BY_DOMAIN) list.classList.add("is-clustered"); else list.classList.remove("is-clustered");
+    const keyFn = CLUSTER_BY_DOMAIN ? ((r) => clusterKeyOf(r.url)) : ((r) => hostnameOf(r.url) || "(local)");
+    const groups = sortGroups(groupRowsByHost(filtered, keyFn), SORT_MODE);
     // Default: expand groups whose rollup heat ≥ HOT_THRESHOLD, collapse the rest.
     // Per-host overrides come from chrome.storage.local ("th:groupOpen:<host>").
     let overrides = {};
@@ -1007,14 +1061,15 @@ async function render() {
       overrides = all || {};
     } catch {}
     for (const g of groups) {
-      const key = "th:groupOpen:" + g.host;
+      const key = (CLUSTER_BY_DOMAIN ? "th:clusterOpen:" : "th:groupOpen:") + g.host;
       const expanded = key in overrides
         ? !!overrides[key]
         : (g.heat >= HOT_THRESHOLD || groups.length <= 4);
-      appendGroup(frag, g, expanded);
+      appendGroup(frag, g, expanded, CLUSTER_BY_DOMAIN ? "th:clusterOpen:" : "th:groupOpen:");
     }
   } else {
     list.classList.remove("is-grouped");
+    list.classList.remove("is-clustered");
     for (const row of filtered) frag.appendChild(rowElement(row));
   }
   list.appendChild(frag);
@@ -1608,8 +1663,45 @@ async function wireGroupToggle() {
   applyGroupToggleVisual(btn);
   btn.addEventListener("click", () => {
     GROUP_BY_HOST = !GROUP_BY_HOST;
+    // Group-by-host and Cluster-by-domain are mutually exclusive: turning one on
+    // turns the other off so the popup never tries to render two grouping modes.
+    if (GROUP_BY_HOST && CLUSTER_BY_DOMAIN) {
+      CLUSTER_BY_DOMAIN = false;
+      try { chrome.storage?.local?.set?.({ "th:clusterByDomain": false }); } catch {}
+      const cb = document.getElementById("cluster-toggle-btn");
+      if (cb) applyClusterToggleVisual(cb);
+    }
     applyGroupToggleVisual(btn);
     try { chrome.storage?.local?.set?.({ "th:groupByHost": GROUP_BY_HOST }); } catch {}
+    render().catch((err) => console.warn(LOG, "re-render failed:", err));
+  });
+}
+
+/**
+ * Wire the "Cluster by domain" toggle. Clusters tabs by registrable domain
+ * so subdomains (mail.google.com + docs.google.com) collapse together under
+ * `google.com`. Mutually exclusive with the per-host grouping above.
+ */
+async function wireClusterToggle() {
+  const btn = document.getElementById("cluster-toggle-btn");
+  if (!btn) return;
+  try {
+    const stored = await new Promise((resolve) => {
+      chrome.storage?.local?.get?.(["th:clusterByDomain"], (items) => resolve(items || {}));
+    });
+    CLUSTER_BY_DOMAIN = !!stored["th:clusterByDomain"];
+  } catch {}
+  applyClusterToggleVisual(btn);
+  btn.addEventListener("click", () => {
+    CLUSTER_BY_DOMAIN = !CLUSTER_BY_DOMAIN;
+    if (CLUSTER_BY_DOMAIN && GROUP_BY_HOST) {
+      GROUP_BY_HOST = false;
+      try { chrome.storage?.local?.set?.({ "th:groupByHost": false }); } catch {}
+      const gb = document.getElementById("group-toggle-btn");
+      if (gb) applyGroupToggleVisual(gb);
+    }
+    applyClusterToggleVisual(btn);
+    try { chrome.storage?.local?.set?.({ "th:clusterByDomain": CLUSTER_BY_DOMAIN }); } catch {}
     render().catch((err) => console.warn(LOG, "re-render failed:", err));
   });
 }
@@ -2160,7 +2252,14 @@ function applyGroupToggleVisual(btn) {
   btn.classList.toggle("is-active", GROUP_BY_HOST);
 }
 
+function applyClusterToggleVisual(btn) {
+  if (!btn) return;
+  btn.setAttribute("aria-pressed", CLUSTER_BY_DOMAIN ? "true" : "false");
+  btn.classList.toggle("is-active", CLUSTER_BY_DOMAIN);
+}
+
 let GROUP_BY_HOST = false;
+let CLUSTER_BY_DOMAIN = false;
 let FILTER_QUERY = "";
 let SORT_MODE = "heat";
 // Chrome tab-group id to filter by, or "all" for no filter, or "none" for ungrouped tabs.
@@ -2247,7 +2346,7 @@ wireQuickChips().catch((err) => console.warn(LOG, "wireQuickChips failed:", err)
 wireJumpHottest();
 wireSearch();
 wireBulkSelect();
-Promise.all([wireSort(), wireGroupToggle(), resolveCurrentWindowId()])
+Promise.all([wireSort(), wireGroupToggle(), wireClusterToggle(), resolveCurrentWindowId()])
   .then(() => render())
   .catch((err) => console.warn(LOG, "render failed:", err));
 
