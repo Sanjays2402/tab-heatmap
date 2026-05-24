@@ -146,6 +146,7 @@ function buildRows(tabs, accessedMap, countsMap, sparkMap, openedMap) {
     return {
       id: t.id,
       windowId: t.windowId,
+      index: typeof t.index === "number" ? t.index : 0,
       title: t.title || t.url || "Untitled",
       url: t.url || "",
       favIconUrl: t.favIconUrl || "",
@@ -187,6 +188,13 @@ function sortRows(rows, mode) {
     case "alpha":
       arr.sort(cmpAlpha);
       break;
+    case "manual":
+      // Preserve Chrome's native tab-strip order so drag-reorder is meaningful.
+      arr.sort((a, b) => {
+        if (a.windowId !== b.windowId) return (a.windowId || 0) - (b.windowId || 0);
+        return (a.index || 0) - (b.index || 0);
+      });
+      break;
     case "heat":
     default:
       arr.sort((a, b) => b.heat - a.heat);
@@ -211,6 +219,12 @@ function sortGroups(groups, mode) {
     case "alpha":
       arr.sort((a, b) => a.host.localeCompare(b.host));
       break;
+    case "manual": {
+      // Group order follows the lowest tab-strip index inside each group.
+      const minIdx = (g) => g.rows.reduce((m, r) => Math.min(m, r.index ?? Infinity), Infinity);
+      arr.sort((a, b) => minIdx(a) - minIdx(b));
+      break;
+    }
     case "heat":
     default:
       arr.sort((a, b) => b.heat - a.heat || b.rows.length - a.rows.length);
@@ -875,8 +889,96 @@ function rowElement(row) {
     }
   });
   if (!SELECT_MODE) wireRowTooltip(li, row);
+  if (SORT_MODE === "manual" && !SELECT_MODE) wireRowDrag(li, row);
 
   return li;
+}
+
+/**
+ * Wire HTML5 drag-and-drop on a tab row to reorder priority within a window.
+ * Only invoked when SORT_MODE === "manual". Calls chrome.tabs.move to persist
+ * the change and re-renders. Drops onto a different window are rejected to
+ * keep the contract focused on “reorder priority within popup”.
+ */
+function wireRowDrag(li, row) {
+  li.setAttribute("draggable", "true");
+  li.classList.add("is-draggable");
+
+  li.addEventListener("dragstart", (ev) => {
+    try {
+      ev.dataTransfer.effectAllowed = "move";
+      ev.dataTransfer.setData("text/x-tab-id", String(row.id));
+      ev.dataTransfer.setData("text/x-tab-window", String(row.windowId));
+      ev.dataTransfer.setData("text/plain", row.url || row.title || "");
+    } catch { /* noop */ }
+    li.classList.add("is-dragging");
+    document.body.classList.add("is-row-dragging");
+  });
+
+  li.addEventListener("dragend", () => {
+    li.classList.remove("is-dragging");
+    document.body.classList.remove("is-row-dragging");
+    const list = document.getElementById("tab-list");
+    if (list) for (const el of list.querySelectorAll(".tab-row")) {
+      el.classList.remove("is-drop-before");
+      el.classList.remove("is-drop-after");
+    }
+  });
+
+  li.addEventListener("dragover", (ev) => {
+    const types = ev.dataTransfer && ev.dataTransfer.types;
+    if (!types || !Array.from(types).includes("text/x-tab-id")) return;
+    ev.preventDefault();
+    ev.dataTransfer.dropEffect = "move";
+    const rect = li.getBoundingClientRect();
+    const before = (ev.clientY - rect.top) < rect.height / 2;
+    li.classList.toggle("is-drop-before", before);
+    li.classList.toggle("is-drop-after", !before);
+  });
+
+  li.addEventListener("dragleave", () => {
+    li.classList.remove("is-drop-before");
+    li.classList.remove("is-drop-after");
+  });
+
+  li.addEventListener("drop", (ev) => {
+    const srcIdRaw = ev.dataTransfer && ev.dataTransfer.getData("text/x-tab-id");
+    const srcWinRaw = ev.dataTransfer && ev.dataTransfer.getData("text/x-tab-window");
+    if (!srcIdRaw) return;
+    ev.preventDefault();
+    const srcId = Number(srcIdRaw);
+    const srcWin = Number(srcWinRaw);
+    li.classList.remove("is-drop-before");
+    li.classList.remove("is-drop-after");
+    if (!Number.isFinite(srcId) || srcId === row.id) return;
+    if (Number.isFinite(srcWin) && srcWin !== row.windowId) {
+      console.warn(LOG, "drag-reorder skipped: cross-window drop");
+      return;
+    }
+    const rect = li.getBoundingClientRect();
+    const before = (ev.clientY - rect.top) < rect.height / 2;
+    moveTabToIndex(srcId, row.windowId, row.index, before).catch((err) => {
+      console.warn(LOG, "moveTabToIndex failed:", err);
+    });
+  });
+}
+
+/**
+ * Move `srcTabId` adjacent to a target row at `targetIndex` within `windowId`.
+ * `before=true` places the source ahead of the target, otherwise after.
+ * Chrome handles pinned/unpinned partitioning internally; we just compute index.
+ */
+async function moveTabToIndex(srcTabId, windowId, targetIndex, before) {
+  try {
+    const src = await chrome.tabs.get(srcTabId);
+    let dest = before ? targetIndex : targetIndex + 1;
+    if (src && typeof src.index === "number" && src.windowId === windowId && src.index < dest) {
+      dest = Math.max(0, dest - 1);
+    }
+    await chrome.tabs.move(srcTabId, { windowId, index: dest });
+  } finally {
+    render().catch(() => {});
+  }
 }
 
 /** Focus an existing tab + its window. */
@@ -2563,7 +2665,7 @@ const SELECTED = new Set();
 let CLOSE_SELECTED_ARMED = false;
 let CLOSE_SELECTED_TIMER = 0;
 
-const VALID_SORT_MODES = new Set(["heat", "recency", "frequency", "alpha"]);
+const VALID_SORT_MODES = new Set(["heat", "recency", "frequency", "alpha", "manual"]);
 
 /** Wire the sort dropdown. Persists last choice in chrome.storage.local. */
 async function wireSort() {
